@@ -70,6 +70,11 @@ export interface BraceParams {
   strapSlotWidth: number;
   strapMargin: number;
 
+  // Plantar / palmar extension (hock / carpal): the shell continues down the caudal side of the paw
+  footPlate: boolean;
+  footPlateLength: number;
+  footPlateWidth: number;
+
   // Ventilation
   perforate: boolean;
   perfDiameter: number;
@@ -171,7 +176,10 @@ const BASE: Omit<BraceParams, 'braceType'> = {
   strapWidth: 25,
   strapSlotWidth: 4,
   strapMargin: 7,
-  perforate: true,
+  footPlate: false,
+  footPlateLength: 30,
+  footPlateWidth: 150,
+  perforate: false,
   perfDiameter: 7,
   perfSpacing: 13,
   perfMargin: 6,
@@ -199,14 +207,32 @@ export function trimShapeAt(shape: number[] | undefined, thetaUser: number): num
   return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t);
 }
 
+/**
+ * Default designs per brace type, modelled on the Hero Braces product line:
+ * a rigid shell that wraps the caudal side of the limb, wide cranial opening
+ * closed with straps, no vent holes; hinged stifle and carpal; rigid
+ * one-piece hock. (Hero hock/carpal braces also have a sole under the paw;
+ * see footPlate for the current plantar/palmar extension.)
+ */
 function presetParams(braceType: BraceType): BraceParams {
   switch (braceType) {
     case 'stifle':
-      return { ...BASE, braceType, proxTrimTilt: 8, romFlexion: 80, romExtension: 150, openingCenter: 0, openingWidthProx: 80, openingWidthDist: 70, reliefs: [] };
+      return {
+        ...BASE, braceType, linerOffset: 2.5, wallThickness: 3.5, proxTrimTilt: 8, hinged: true, romFlexion: 80, romExtension: 150,
+        openingCenter: 0, openingWidthProx: 120, openingWidthDist: 110, strapsPerCuff: 2, strapWidth: 25, reliefs: [],
+      };
     case 'hock':
-      return { ...BASE, braceType, wallThickness: 3, jointGap: 10, hingeRadius: 9, romFlexion: 90, romExtension: 165, hingeHole: 4, openingCenter: 0, openingWidthProx: 70, openingWidthDist: 80, perfDiameter: 6, perfSpacing: 11, reliefs: [] };
+      return {
+        ...BASE, braceType, linerOffset: 2.5, wallThickness: 3, hinged: false, jointGap: 10, hingeRadius: 9, hingeHole: 4, romFlexion: 90, romExtension: 165,
+        openingCenter: 0, openingWidthProx: 160, openingWidthDist: 140, strapsPerCuff: 2, strapWidth: 25,
+        footPlate: false, footPlateLength: 30, footPlateWidth: 150, reliefs: [],
+      };
     case 'carpal':
-      return { ...BASE, braceType, wallThickness: 3, hinged: false, romFlexion: 110, romExtension: 190, jointGap: 8, hingeRadius: 8, hingeHole: 4, openingCenter: 0, openingWidthProx: 70, openingWidthDist: 90, strapWidth: 20, perfDiameter: 6, perfSpacing: 11, reliefs: [] };
+      return {
+        ...BASE, braceType, linerOffset: 2.5, wallThickness: 3, hinged: true, jointGap: 8, hingeRadius: 8, hingeHole: 4, romFlexion: 110, romExtension: 190,
+        openingCenter: 0, openingWidthProx: 150, openingWidthDist: 140, strapsPerCuff: 2, strapWidth: 22,
+        footPlate: false, footPlateLength: 25, footPlateWidth: 150, perfDiameter: 6, perfSpacing: 11, reliefs: [],
+      };
   }
 }
 
@@ -261,6 +287,9 @@ export const PARAM_SPECS: ParamSpec[] = [
   { key: 'strapSlotWidth', group: 'Straps', label: 'Slot width', kind: 'number', min: 2, max: 10, step: 0.5, unit: 'mm' },
   { key: 'strapMargin', group: 'Straps', label: 'Slot distance from edge', kind: 'number', min: 3, max: 25, step: 0.5, unit: 'mm' },
 
+  { key: 'footPlate', group: 'Paw extension', label: 'Plantar / palmar extension', kind: 'bool', help: 'Extends the distal cuff down the caudal side of the paw toward the pads. Not yet a full sole under the paw.' },
+  { key: 'footPlateLength', group: 'Paw extension', label: 'Length past distal trim', kind: 'number', min: 5, max: 80, step: 1, unit: 'mm', showIf: (p) => p.footPlate, help: 'Place the distal landmark above the pads; the plate extends this far toward the toes.' },
+  { key: 'footPlateWidth', group: 'Paw extension', label: 'Width around the paw', kind: 'number', min: 60, max: 240, step: 5, unit: '°', showIf: (p) => p.footPlate },
   { key: 'perforate', group: 'Ventilation', label: 'Ventilation holes', kind: 'bool' },
   { key: 'perfDiameter', group: 'Ventilation', label: 'Hole diameter', kind: 'number', min: 3, max: 20, step: 0.5, unit: 'mm', showIf: (p) => p.perforate },
   { key: 'perfSpacing', group: 'Ventilation', label: 'Hole spacing', kind: 'number', min: 6, max: 40, step: 0.5, unit: 'mm', showIf: (p) => p.perforate },

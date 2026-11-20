@@ -199,7 +199,18 @@ function trimEnd(frame: CuffFrame, p: BraceParams, thetaUser: number): number {
   const off = isProx ? p.proxTrimOffset : p.distTrimOffset;
   const tilt = isProx ? p.proxTrimTilt : p.distTrimTilt;
   const shape = trimShapeAt(isProx ? p.proxTrimShape : p.distTrimShape, thetaUser);
-  return frame.length + off + tilt * Math.cos(thetaUser - Math.PI / 2) + shape;
+  return frame.length + off + tilt * Math.cos(thetaUser - Math.PI / 2) + shape + (isProx ? 0 : footPlateExtension(p, thetaUser));
+}
+
+/**
+ * Plantar / palmar extension: the distal cuff's caudal side continues past the
+ * distal trim toward the paw pads, with a smooth cosine taper toward the sides.
+ */
+export function footPlateExtension(p: BraceParams, thetaUser: number): number {
+  if (!p.footPlate || p.footPlateLength <= 0) return 0;
+  const half = (p.footPlateWidth * Math.PI) / 360;
+  const d = Math.abs(angDiff(thetaUser, Math.PI));
+  return d < half ? p.footPlateLength * 0.5 * (1 + Math.cos((Math.PI * d) / half)) : 0;
 }
 
 function setupCuff(scan: ScanModel, frames: LimbFrames, frame: CuffFrame, other: CuffFrame, p: BraceParams): Cuff {
@@ -431,6 +442,8 @@ function buildFields(c: Cuff, frames: LimbFrames, p: BraceParams, rom: Rom | nul
 
       const edgeDist = (Math.abs(angDiff(th, openC)) - openHalf) * r; // < 0 inside the opening
       if (openHalf > 0) fv = smax(fv, -edgeDist, 4);
+      // A wide donning opening must never cut into the hinge pads.
+      if (p.hinged) fv = Math.min(fv, c.rho[j] - R);
       c.fTrim[j] = fv;
 
       for (const hs of strapH) {

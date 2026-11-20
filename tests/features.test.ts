@@ -36,7 +36,7 @@ describe('range-of-motion stops', () => {
   for (const type of ['stifle', 'hock'] as BraceType[]) {
     it(`${type}: reports the scanned joint angle and cuts pin hole + arc slot`, () => {
       const { demo, scan } = load(type);
-      const base = { ...defaultParams(type), perforate: false, resolution: 1.25 };
+      const base = { ...defaultParams(type), hinged: true, perforate: false, resolution: 1.25 };
       const a = generateBrace(scan, demo.landmarks, base);
       expect(a.jointAngle).toBeGreaterThan(100);
       expect(a.jointAngle).toBeLessThan(170);
@@ -78,5 +78,42 @@ describe('gap map and edge rounding', () => {
     const round = generateBrace(scan, demo.landmarks, { ...p, edgeRounding: 3 });
     expect(round.cuffs[0].check.volume).toBeLessThan(sharp.cuffs[0].check.volume);
     expect(round.cuffs[0].check.boundaryEdges).toBe(0);
+  });
+});
+
+describe('Hero-style defaults', () => {
+  it('hock is a rigid one-piece shell with no vent holes; carpal is hinged', () => {
+    const p = defaultParams('hock');
+    expect(p.hinged).toBe(false);
+    expect(p.perforate).toBe(false);
+    expect(defaultParams('carpal').hinged).toBe(true);
+  });
+
+  for (const type of ['hock', 'carpal'] as BraceType[]) {
+    it(`${type}: the plantar/palmar extension lengthens the distal cuff and stays closed`, () => {
+      const { demo, scan } = load(type);
+      const p = { ...defaultParams(type), resolution: 1.5 };
+      const without = generateBrace(scan, demo.landmarks, { ...p, footPlate: false });
+      const withPlate = generateBrace(scan, demo.landmarks, { ...p, footPlate: true });
+      const d = withPlate.cuffs[1];
+      expect(d.check.boundaryEdges).toBe(0);
+      expect(d.check.nonManifoldEdges).toBe(0);
+      expect(d.check.volume).toBeGreaterThan(without.cuffs[1].check.volume * 1.1);
+    });
+  }
+
+  it('a very wide opening never removes the hinge pads', () => {
+    const { demo, scan } = load('carpal');
+    const r = generateBrace(scan, demo.landmarks, { ...defaultParams('carpal'), openingWidthProx: 220, openingWidthDist: 220, resolution: 1.25 });
+    const lat = demo.landmarks.jointLateral!;
+    for (const c of r.cuffs) {
+      expect(c.check.boundaryEdges).toBe(0);
+      const pos = c.geometry.getAttribute('position');
+      let near = 0;
+      for (let i = 0; i < pos.count; i++) {
+        if (Math.hypot(pos.getX(i) - lat[0], pos.getY(i) - lat[1]) < 6) near++;
+      }
+      expect(near).toBeGreaterThan(20);
+    }
   });
 });

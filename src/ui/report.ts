@@ -36,11 +36,11 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:3px 6px;
 img{width:100%;border:1px solid #ddd;border-radius:6px;background:#eef2f5}
 .sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:30px}.sign div{border-top:1px solid #444;padding-top:4px;color:#555}
 .disc{margin-top:18px;font-size:11px;color:#555}
-.bhead{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid ${BRAND.colors.light.accent}}.bhead img{height:40px;width:auto;max-width:220px;border:0;border-radius:0;background:none}.bhead span{color:#555;font-size:11px}.bhead .mono{display:inline-grid;place-items:center;width:36px;height:36px;border-radius:8px;color:#fff;font-weight:700;font-size:14px}
+.bhead{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid ${BRAND.palette.navy}}.bhead img{height:40px;width:auto;max-width:220px;border:0;border-radius:0;background:none}.bhead span{color:#555;font-size:11px}.bhead .mono{display:inline-grid;place-items:center;width:36px;height:36px;border-radius:8px;color:#fff;font-weight:700;font-size:14px}
 @media print{body{margin:12mm}button{display:none}}
 </style></head><body>
 <button onclick="print()" style="float:right">Print</button>
-<div class="bhead">${BRAND_LOGO ? `<img src="${new URL(BRAND_LOGO, location.href).href}" alt="${esc(BRAND.company)}">` : `<span class="mono" style="background:${BRAND.colors.light.accent}">${esc(BRAND.monogram)}</span>`}<div><b>${esc(BRAND.company)}</b><br><span>${esc(BRAND.website)}</span></div></div>
+<div class="bhead">${BRAND_LOGO ? `<img src="${new URL(BRAND_LOGO, location.href).href}" alt="${esc(BRAND.company)}">` : `<span class="mono" style="background:${BRAND.palette.navy}">${esc(BRAND.monogram)}</span>`}<div><b>${esc(BRAND.company)}</b><br><span>${esc(BRAND.website)}</span></div></div>
 <h1>${esc(bt.label)} orthosis — work order</h1>
 <div class="sub">Case ${esc(c.caseId)} · ${esc(c.side)} ${p.braceType === 'carpal' ? 'thoracic' : 'pelvic'} limb · generated ${new Date().toLocaleString()}</div>
 <div class="cols">

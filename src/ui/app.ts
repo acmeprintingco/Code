@@ -14,7 +14,7 @@ import { SCAN_ACCEPT, download, emptyCase, parseProject, pickFile, readScanFile,
 import { openWorkOrder } from './report';
 import type { CuffPayload, FromWorker, SerializedFrames, ToWorker } from './protocol';
 import { icon } from './icons';
-import { BRAND, BRAND_LOGO } from '../brand/brand';
+import { BRAND, BRAND_LOGO, BRAND_LOGO_DARK } from '../brand/brand';
 import { applyTheme, type Theme } from './theme';
 
 /** Keep the filled part of range sliders in sync with their value. */
@@ -101,9 +101,13 @@ export class App {
     this.caseTitle = h('span', { class: 'case-chip' });
     this.themeBtn = h('button', { class: 'icon-btn', onclick: () => this.toggleTheme() });
     const top = h('header', { class: 'topbar' },
-      h('div', { class: 'brand' },
-        BRAND_LOGO ? h('img', { class: 'logo-img', src: BRAND_LOGO, alt: BRAND.company }) : h('div', { class: 'logo' }, BRAND.monogram),
-        h('div', {}, BRAND.product, h('small', {}, BRAND.tagline))),
+      BRAND_LOGO
+        ? h('div', { class: 'brand' },
+          h('img', { class: 'logo-img logo-light', src: BRAND_LOGO, alt: BRAND.company }),
+          h('img', { class: 'logo-img logo-dark', src: BRAND_LOGO_DARK ?? BRAND_LOGO, alt: BRAND.company }),
+          h('div', { class: 'brand-sep' }),
+          h('div', { class: 'brand-label' }, BRAND.appLabel, h('small', {}, BRAND.tagline)))
+        : h('div', { class: 'brand' }, h('div', { class: 'logo' }, BRAND.monogram), h('div', {}, BRAND.product, h('small', {}, BRAND.tagline))),
       this.caseTitle,
       h('div', { class: 'spacer' }),
       h('button', { class: 'btn ghost', onclick: () => this.openProject() }, icon('FolderOpen'), h('span', { class: 'btn-label' }, 'Open')),

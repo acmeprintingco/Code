@@ -11,7 +11,24 @@ The sun/moon button in the top bar switches between light and dark mode. The cho
 
 ## Branding
 
-All brand settings live in [`src/brand/brand.ts`](src/brand/brand.ts): company and product name, tagline, website, case-ID prefix and the accent colour for each theme. Every other accent shade is derived from those. To use the official logo, drop `logo.svg` (preferred), `logo.png` or `logo.webp` into `src/brand/` and rebuild. It then appears in the top bar, browser tab and printed work order; without it, an "HB" monogram is drawn.
+Built for **Hero Braces** ([goherogo.com](https://goherogo.com)). All brand settings live in [`src/brand/brand.ts`](src/brand/brand.ts): name, tagline, website, the `HB-` case-ID prefix, and colours taken from the website (navy `#123b4e`, Hero yellow `#eeea13` for primary buttons, teal `#108474` for highlights, navy-tinted dark mode).
+
+Logo files in `src/brand/`:
+- `logo.png`: light theme and work order
+- `logo-dark.png`: white wordmark for dark mode
+- `mark.png`: browser tab icon
+
+The desktop app icon is `build/icon.png`. Replace any of these with official SVG/PNG exports and rebuild.
+
+### Default designs (modelled on the Hero product line)
+
+| Brace | Construction | Opening | Joint |
+|---|---|---|---|
+| Stifle | Thigh cuff + crus cuff | Wide cranial opening, straps across the front | Hinged, pads on both sides |
+| Hock | One-piece rigid shell down the caudal side | Wide cranial opening | Rigid (3-point support) |
+| Carpal | Forearm cuff + paw cuff | Wide cranial opening | Hinged |
+
+There are no vent holes by default (they can be switched on). A *plantar / palmar extension* can continue the shell down the back of the paw. A true sole under the paw (as on Hero hock and carpal braces) is not modelled yet.
 
 ## Quick start
 
