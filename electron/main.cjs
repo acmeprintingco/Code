@@ -1,4 +1,4 @@
-// Desktop shell for PetBrace Studio. Serves the Vite build from dist/ over a
+// Desktop shell for Hero Braces Studio. Serves the Vite build from dist/ over a
 // privileged app:// scheme so the module web worker loads like on the web.
 const { app, BrowserWindow, Menu, nativeTheme, net, protocol, shell } = require('electron');
 const path = require('node:path');
@@ -16,7 +16,7 @@ function createWindow() {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    title: 'PetBrace Studio',
+    title: 'Hero Braces Studio',
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0a0d12' : '#f4f6f9',
     webPreferences: { contextIsolation: true, sandbox: true },
   });

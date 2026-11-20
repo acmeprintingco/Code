@@ -6,6 +6,7 @@ import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { BraceParams, Landmarks } from '../core/params';
 import type { Units } from '../core/scan';
+import { BRAND } from '../brand/brand';
 
 export const SCAN_ACCEPT = '.stl,.obj,.ply';
 
@@ -48,7 +49,7 @@ export interface CaseInfo {
 
 export function emptyCase(): CaseInfo {
   const d = new Date();
-  const id = `PB-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${Math.floor(Math.random() * 9000 + 1000)}`;
+  const id = `${BRAND.casePrefix}-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${Math.floor(Math.random() * 9000 + 1000)}`;
   return { caseId: id, patient: '', species: 'Canine', breed: '', weightKg: '', age: '', side: 'Right', owner: '', clinic: '', clinician: '', diagnosis: '', notes: '' };
 }
 
@@ -88,7 +89,7 @@ export function serializeProject(caseInfo: CaseInfo, params: BraceParams, landma
 
 export function parseProject(text: string): { file: ProjectFile; geometry: BufferGeometry | null } {
   const file = JSON.parse(text) as ProjectFile;
-  if (file.format !== 'petbrace-project') throw new Error('Not a PetBrace project file.');
+  if (file.format !== 'petbrace-project') throw new Error(`Not a ${BRAND.product} project file.`);
   let geometry: BufferGeometry | null = null;
   if (file.scan) {
     geometry = new BufferGeometry();

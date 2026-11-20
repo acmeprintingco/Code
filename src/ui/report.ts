@@ -3,6 +3,7 @@ import { BRACE_TYPES, PARAM_SPECS, type BraceParams, type Material } from '../co
 import type { CaseInfo } from './io';
 import type { CuffPayload, SerializedFrames } from './protocol';
 import { massGrams } from '../core/exporters';
+import { BRAND, BRAND_LOGO } from '../brand/brand';
 
 const shapeText = (shape: number[]) =>
   shape.every((v) => v === 0) ? 'None' : shape.map((v, i) => (v ? `${i * 45}°: ${v > 0 ? '+' : ''}${v} mm` : '')).filter(Boolean).join(', ');
@@ -26,7 +27,7 @@ export function openWorkOrder(opts: {
   const reliefs = p.reliefs.length
     ? p.reliefs.map((r) => `<tr><td>${esc(r.label)}</td><td>${r.amount > 0 ? 'Relief' : 'Compression'}</td><td>${r.amount} mm</td><td>${r.radius} mm</td></tr>`).join('')
     : '<tr><td colspan="4">None</td></tr>';
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Work order ${esc(c.caseId)}</title>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(BRAND.company)} work order ${esc(c.caseId)}</title>
 <style>
 body{font:12px/1.45 system-ui,sans-serif;color:#111;margin:28px;max-width:860px}
 h1{font-size:20px;margin:0 0 2px}h2{font-size:13px;margin:18px 0 6px;border-bottom:1px solid #ccc;padding-bottom:3px;text-transform:uppercase;letter-spacing:.4px;color:#333}
@@ -35,9 +36,11 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:3px 6px;
 img{width:100%;border:1px solid #ddd;border-radius:6px;background:#eef2f5}
 .sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:30px}.sign div{border-top:1px solid #444;padding-top:4px;color:#555}
 .disc{margin-top:18px;font-size:11px;color:#555}
+.bhead{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid ${BRAND.colors.light.accent}}.bhead img{height:40px;width:auto;max-width:220px;border:0;border-radius:0;background:none}.bhead span{color:#555;font-size:11px}.bhead .mono{display:inline-grid;place-items:center;width:36px;height:36px;border-radius:8px;color:#fff;font-weight:700;font-size:14px}
 @media print{body{margin:12mm}button{display:none}}
 </style></head><body>
 <button onclick="print()" style="float:right">Print</button>
+<div class="bhead">${BRAND_LOGO ? `<img src="${new URL(BRAND_LOGO, location.href).href}" alt="${esc(BRAND.company)}">` : `<span class="mono" style="background:${BRAND.colors.light.accent}">${esc(BRAND.monogram)}</span>`}<div><b>${esc(BRAND.company)}</b><br><span>${esc(BRAND.website)}</span></div></div>
 <h1>${esc(bt.label)} orthosis — work order</h1>
 <div class="sub">Case ${esc(c.caseId)} · ${esc(c.side)} ${p.braceType === 'carpal' ? 'thoracic' : 'pelvic'} limb · generated ${new Date().toLocaleString()}</div>
 <div class="cols">
@@ -58,7 +61,7 @@ ${p.hinged && p.romStops ? `<tr><td>☐ Fit ${p.stopPinDiameter} mm stop pins th
 <tr><td>☐ Fit straps (${p.strapWidth} mm hook-and-loop)</td></tr>
 <tr><td>☐ Fit check and gait evaluation</td></tr></table></div></div>
 <div class="sign"><div>Designed by</div><div>Approved by (veterinarian)</div></div>
-<p class="disc">Custom veterinary orthotic device. Fit, function and skin condition must be checked by a veterinarian at delivery and at regular intervals.</p>
+<p class="disc">Custom veterinary orthotic device. Fit, function and skin condition must be checked by a veterinarian at delivery and at regular intervals.<br>${esc(BRAND.company)} · ${esc(BRAND.website)}</p>
 </body></html>`;
   const w = window.open('', '_blank');
   if (!w) throw new Error('Pop-up blocked — allow pop-ups to open the work order.');

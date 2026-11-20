@@ -1,7 +1,7 @@
 /** Binary STL export and printing estimates. */
 import type { BufferGeometry } from 'three';
 
-export function toBinarySTL(geometries: BufferGeometry[], header = 'PetBrace Studio'): ArrayBuffer {
+export function toBinarySTL(geometries: BufferGeometry[], header = 'Custom orthotic brace'): ArrayBuffer {
   let triCount = 0;
   for (const g of geometries) triCount += g.getIndex() ? g.getIndex()!.count / 3 : g.getAttribute('position').count / 3;
   const buf = new ArrayBuffer(84 + triCount * 50);

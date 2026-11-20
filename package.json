@@ -1,8 +1,8 @@
 {
-  "name": "petbrace-studio",
+  "name": "hero-braces-studio",
   "version": "0.1.0",
   "private": true,
-  "description": "3D design software for 3D-printed veterinary orthopedic braces (stifle, hock, carpal) from limb scans.",
+  "description": "Hero Braces Studio: design custom 3D-printed veterinary orthopedic braces (stifle, hock, carpal) from limb scans.",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -28,8 +28,8 @@
   },
   "main": "electron/main.cjs",
   "build": {
-    "appId": "com.acmeprint.petbrace",
-    "productName": "PetBrace Studio",
+    "appId": "com.herobraces.studio",
+    "productName": "Hero Braces Studio",
     "directories": {
       "output": "release"
     },
@@ -50,5 +50,5 @@
       "category": "Graphics"
     }
   },
-  "author": "Acme Printing Co."
+  "author": "Hero Braces"
 }

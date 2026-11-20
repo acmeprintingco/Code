@@ -1,13 +1,17 @@
-# PetBrace Studio
+# Hero Braces Studio
 
 3D design software for **custom 3D-printed veterinary orthopedic braces**: stifle (knee), hock (tarsus) and carpal (wrist).
 Import a 3D scan of the limb, place five anatomical landmarks, tune the design, and export watertight, print-ready STL files plus a printable work order.
 
 | Light | Dark |
 |---|---|
-| ![PetBrace Studio, light theme](docs/workflow.png) | ![PetBrace Studio, dark theme](docs/workflow-dark.png) |
+| ![Hero Braces Studio, light theme](docs/workflow.png) | ![Hero Braces Studio, dark theme](docs/workflow-dark.png) |
 
 The sun/moon button in the top bar switches between light and dark mode. The choice is remembered on each device and defaults to the operating system setting.
+
+## Branding
+
+All brand settings live in [`src/brand/brand.ts`](src/brand/brand.ts): company and product name, tagline, website, case-ID prefix and the accent colour for each theme. Every other accent shade is derived from those. To use the official logo, drop `logo.svg` (preferred), `logo.png` or `logo.webp` into `src/brand/` and rebuild. It then appears in the top bar, browser tab and printed work order; without it, an "HB" monogram is drawn.
 
 ## Quick start
 

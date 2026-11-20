@@ -14,6 +14,7 @@ import { SCAN_ACCEPT, download, emptyCase, parseProject, pickFile, readScanFile,
 import { openWorkOrder } from './report';
 import type { CuffPayload, FromWorker, SerializedFrames, ToWorker } from './protocol';
 import { icon } from './icons';
+import { BRAND, BRAND_LOGO } from '../brand/brand';
 import { applyTheme, type Theme } from './theme';
 
 /** Keep the filled part of range sliders in sync with their value. */
@@ -100,7 +101,9 @@ export class App {
     this.caseTitle = h('span', { class: 'case-chip' });
     this.themeBtn = h('button', { class: 'icon-btn', onclick: () => this.toggleTheme() });
     const top = h('header', { class: 'topbar' },
-      h('div', { class: 'brand' }, h('div', { class: 'logo' }, 'PB'), h('div', {}, 'PetBrace Studio', h('small', {}, 'Veterinary orthotic design'))),
+      h('div', { class: 'brand' },
+        BRAND_LOGO ? h('img', { class: 'logo-img', src: BRAND_LOGO, alt: BRAND.company }) : h('div', { class: 'logo' }, BRAND.monogram),
+        h('div', {}, BRAND.product, h('small', {}, BRAND.tagline))),
       this.caseTitle,
       h('div', { class: 'spacer' }),
       h('button', { class: 'btn ghost', onclick: () => this.openProject() }, icon('FolderOpen'), h('span', { class: 'btn-label' }, 'Open')),
@@ -630,7 +633,7 @@ export class App {
     }
     const base = safeName([this.caseInfo.caseId, this.caseInfo.patient, this.params.braceType].filter(Boolean).join('_'));
     const part = ids.length === 2 ? 'all' : ids[0];
-    download(`${base}_${part}.stl`, toBinarySTL(geoms, `PetBrace ${this.caseInfo.caseId} ${part}`), 'model/stl');
+    download(`${base}_${part}.stl`, toBinarySTL(geoms, `${BRAND.company} ${this.caseInfo.caseId} ${part}`), 'model/stl');
     this.status(`Exported ${base}_${part}.stl`);
   }
 
@@ -645,13 +648,13 @@ export class App {
 
   private saveProject() {
     const text = serializeProject(this.caseInfo, this.params, this.landmarks, this.scan);
-    const name = `${safeName([this.caseInfo.caseId, this.caseInfo.patient].filter(Boolean).join('_'))}.petbrace.json`;
+    const name = `${safeName([this.caseInfo.caseId, this.caseInfo.patient].filter(Boolean).join('_'))}.brace.json`;
     download(name, text, 'application/json');
     this.status(`Saved ${name}`);
   }
 
   private async openProject() {
-    const f = await pickFile('.json,.petbrace.json');
+    const f = await pickFile('.json,.brace.json,.petbrace.json');
     if (!f) return;
     try {
       const { file, geometry } = parseProject(await f.text());
