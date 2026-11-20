@@ -2,6 +2,7 @@
 import {
   AmbientLight, BufferGeometry, Color, DirectionalLight, DoubleSide, Group, HemisphereLight, Line, LineBasicMaterial,
   Mesh, MeshStandardMaterial, PerspectiveCamera, Raycaster, Scene, SphereGeometry, Vector2, Vector3, WebGLRenderer, Box3, Object3D,
+  BufferAttribute, PlaneGeometry, MeshBasicMaterial, Quaternion,
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
@@ -13,6 +14,35 @@ import type { SerializedFrames } from './protocol';
 Mesh.prototype.raycast = acceleratedRaycast;
 
 export type ViewName = 'lateral' | 'medial' | 'cranial' | 'caudal' | 'fit';
+
+export interface TrimHandle {
+  cuff: 'proximal' | 'distal';
+  index: number;
+  position: Vec3;
+  axis: Vec3;
+}
+
+/** Gap colour scale relative to the nominal liner gap: tight (red) → nominal (green) → loose (blue). */
+export const GAP_STOPS: [number, [number, number, number]][] = [
+  [-2, [0.84, 0.19, 0.15]],
+  [-1, [0.99, 0.55, 0.23]],
+  [0, [0.1, 0.6, 0.31]],
+  [2, [0.4, 0.74, 0.86]],
+  [5, [0.19, 0.35, 0.8]],
+];
+
+function gapColor(d: number): [number, number, number] {
+  if (d <= GAP_STOPS[0][0]) return GAP_STOPS[0][1];
+  for (let i = 1; i < GAP_STOPS.length; i++) {
+    const [x1, c1] = GAP_STOPS[i];
+    if (d <= x1) {
+      const [x0, c0] = GAP_STOPS[i - 1];
+      const t = (d - x0) / (x1 - x0);
+      return [c0[0] + (c1[0] - c0[0]) * t, c0[1] + (c1[1] - c0[1]) * t, c0[2] + (c1[2] - c0[2]) * t];
+    }
+  }
+  return GAP_STOPS[GAP_STOPS.length - 1][1];
+}
 
 const V = (a: Vec3) => new Vector3(a[0], a[1], a[2]);
 
@@ -28,6 +58,12 @@ export class Viewer {
   private markerGroup = new Group();
   private reliefGroup = new Group();
   private axesGroup = new Group();
+  private handleGroup = new Group();
+  private cutPlane: Mesh | null = null;
+  private gapMode = false;
+  private liner = 3;
+  private drag: { mesh: Mesh; start: Vector3; axis: Vector3; label: HTMLElement; delta: number } | null = null;
+  onHandleDrag: ((cuff: 'proximal' | 'distal', index: number, deltaMm: number) => void) | null = null;
   private frames: SerializedFrames | null = null;
   private markerSize = 3;
   private down = new Vector2();
@@ -58,7 +94,12 @@ export class Viewer {
     key.position.set(1, 1.5, 1);
     this.camera.add(key);
     this.scene.add(this.camera);
-    this.scene.add(this.braceGroup, this.markerGroup, this.reliefGroup, this.axesGroup);
+    this.scene.add(this.braceGroup, this.markerGroup, this.reliefGroup, this.axesGroup, this.handleGroup);
+
+    // Handle dragging runs in the capture phase so it pre-empts orbiting.
+    container.addEventListener('pointerdown', (e) => this.startDrag(e), { capture: true });
+    window.addEventListener('pointermove', (e) => this.moveDrag(e));
+    window.addEventListener('pointerup', () => this.endDrag());
 
     const el = this.renderer.domElement;
     el.addEventListener('pointerdown', (e) => this.down.set(e.clientX, e.clientY));
@@ -90,23 +131,27 @@ export class Viewer {
     this.camera.updateProjectionMatrix();
   }
 
-  private pickSurface(x: number, y: number): Vec3 | null {
-    if (!this.scanMesh || !this.scanMesh.visible) return null;
+  private setRay(x: number, y: number) {
     const r = this.renderer.domElement.getBoundingClientRect();
     const ndc = new Vector2(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
+  }
+
+  private pickSurface(x: number, y: number): Vec3 | null {
+    if (!this.scanMesh || !this.scanMesh.visible) return null;
+    this.setRay(x, y);
     (this.raycaster as any).firstHitOnly = true;
     const hit = this.raycaster.intersectObject(this.scanMesh, false)[0];
     return hit ? [hit.point.x, hit.point.y, hit.point.z] : null;
   }
 
-  setScan(geometry: BufferGeometry | null) {
+  setScan(geometry: BufferGeometry | null, keepView = false) {
     if (this.scanMesh) {
       this.scene.remove(this.scanMesh);
       this.scanMesh.geometry.dispose();
       this.scanMesh = null;
     }
-    this.frames = null;
+    if (!keepView) this.frames = null;
     if (!geometry) return;
     (geometry as any).computeBoundsTree();
     this.scanMesh = new Mesh(geometry, this.scanMat);
@@ -114,7 +159,7 @@ export class Viewer {
     geometry.computeBoundingBox();
     const diag = geometry.boundingBox!.getSize(new Vector3()).length();
     this.markerSize = Math.max(1.5, diag * 0.008);
-    this.setView('fit');
+    if (!keepView) this.setView('fit');
   }
 
   setScanOpacity(o: number) {
@@ -137,6 +182,111 @@ export class Viewer {
       (c as Mesh).geometry.dispose();
     }
     for (const c of cuffs) this.braceGroup.add(new Mesh(c.geometry, this.braceMats[c.id]));
+    this.applyGapColors();
+  }
+
+  /** Colour the brace by skin-to-shell gap (geometry attribute `gap`) relative to the liner gap. */
+  setGapMap(on: boolean, liner: number) {
+    this.gapMode = on;
+    this.liner = liner;
+    this.applyGapColors();
+  }
+
+  private applyGapColors() {
+    for (const m of Object.values(this.braceMats)) {
+      m.vertexColors = this.gapMode;
+      m.color.set(this.gapMode ? 0xffffff : m === this.braceMats.proximal ? 0x1aa596 : 0x3b7fd1);
+      m.needsUpdate = true;
+    }
+    if (!this.gapMode) return;
+    for (const child of this.braceGroup.children) {
+      const g = (child as Mesh).geometry;
+      const gap = g.getAttribute('gap');
+      if (!gap) continue;
+      const col = new Float32Array(gap.count * 3);
+      for (let i = 0; i < gap.count; i++) col.set(gapColor(gap.getX(i) - this.liner), i * 3);
+      g.setAttribute('color', new BufferAttribute(col, 3));
+    }
+  }
+
+  setHandles(handles: TrimHandle[]) {
+    clear(this.handleGroup);
+    for (const hd of handles) {
+      const m = new Mesh(new SphereGeometry(this.markerSize * 1.15, 20, 14), new MeshStandardMaterial({ color: 0xffffff, emissive: 0x0e5c55, emissiveIntensity: 0.35, roughness: 0.3 }));
+      m.position.copy(V(hd.position));
+      m.userData = { cuff: hd.cuff, index: hd.index, axis: V(hd.axis) };
+      this.handleGroup.add(m);
+    }
+  }
+
+  setHandlesVisible(on: boolean) {
+    this.handleGroup.visible = on;
+  }
+
+  private startDrag(e: PointerEvent) {
+    if (e.button !== 0 || !this.handleGroup.visible || !this.handleGroup.children.length || this.onPick) return;
+    this.setRay(e.clientX, e.clientY);
+    const hit = this.raycaster.intersectObjects(this.handleGroup.children, false)[0];
+    if (!hit) return;
+    e.stopPropagation();
+    const mesh = hit.object as Mesh;
+    const div = document.createElement('div');
+    div.className = 'lbl3d';
+    div.style.background = '#178f84';
+    div.textContent = '0 mm';
+    const label = new CSS2DObject(div);
+    mesh.add(label);
+    this.drag = { mesh, start: mesh.position.clone(), axis: mesh.userData.axis as Vector3, label: div, delta: 0 };
+    this.controls.enabled = false;
+  }
+
+  private moveDrag(e: PointerEvent) {
+    if (!this.drag) return;
+    this.setRay(e.clientX, e.clientY);
+    // Closest point on the handle's axis line to the mouse ray.
+    const { start, axis } = this.drag;
+    const ray = this.raycaster.ray;
+    const w0 = start.clone().sub(ray.origin);
+    const b = axis.dot(ray.direction);
+    const d = axis.dot(w0), e2 = ray.direction.dot(w0);
+    const den = 1 - b * b;
+    if (den < 1e-6) return;
+    const t = (b * e2 - d) / den;
+    this.drag.delta = Math.round(t * 2) / 2;
+    this.drag.mesh.position.copy(start).addScaledVector(axis, this.drag.delta);
+    this.drag.label.textContent = `${this.drag.delta > 0 ? '+' : ''}${this.drag.delta} mm`;
+  }
+
+  private endDrag() {
+    if (!this.drag) return;
+    const { mesh, delta } = this.drag;
+    this.drag = null;
+    this.controls.enabled = true;
+    for (const c of [...mesh.children]) if (c instanceof CSS2DObject) { mesh.remove(c); c.element.remove(); }
+    if (Math.abs(delta) >= 0.5) this.onHandleDrag?.(mesh.userData.cuff, mesh.userData.index, delta);
+  }
+
+  /** World-space direction that points up on screen. */
+  screenUp(): Vec3 {
+    const v = new Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
+    return [v.x, v.y, v.z];
+  }
+
+  showCutPlane(point: Vec3 | null, normal?: Vec3) {
+    if (this.cutPlane) {
+      this.scene.remove(this.cutPlane);
+      this.cutPlane.geometry.dispose();
+      this.cutPlane = null;
+    }
+    if (!point || !normal || !this.scanMesh) return;
+    this.scanMesh.geometry.computeBoundingSphere();
+    const size = this.scanMesh.geometry.boundingSphere!.radius * 2.4;
+    const m = new Mesh(new PlaneGeometry(size, size), new MeshBasicMaterial({ color: 0xeb5757, transparent: true, opacity: 0.28, side: DoubleSide, depthWrite: false }));
+    m.quaternion.copy(new Quaternion().setFromUnitVectors(new Vector3(0, 0, 1), V(normal).normalize()));
+    m.position.copy(V(point));
+    m.renderOrder = 4;
+    this.cutPlane = m;
+    this.scene.add(m);
   }
 
   setLandmarks(l: Landmarks, active: LandmarkId | null) {

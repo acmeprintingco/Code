@@ -130,6 +130,61 @@ export function removeFragments(g: BufferGeometry, fraction: number): { geometry
   if (removed === 0) return { geometry: g, removed: 0 };
   const out = new BufferGeometry();
   out.setAttribute('position', g.getAttribute('position'));
-  out.setIndex(new BufferAttribute(nv > 65535 ? new Uint32Array(keep) : new Uint16Array(keep), 1));
+  out.setIndex(new BufferAttribute(new Uint32Array(keep), 1));
+  return { geometry: compactVertices(out), removed };
+}
+
+/** Drop vertices no triangle references. */
+export function compactVertices(g: BufferGeometry): BufferGeometry {
+  const idx = g.getIndex()!.array;
+  const pos = g.getAttribute('position').array as ArrayLike<number>;
+  const map = new Int32Array(pos.length / 3).fill(-1);
+  const newPos: number[] = [];
+  const newIdx = new Uint32Array(idx.length);
+  for (let t = 0; t < idx.length; t++) {
+    const v = idx[t];
+    if (map[v] < 0) {
+      map[v] = newPos.length / 3;
+      newPos.push(pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]);
+    }
+    newIdx[t] = map[v];
+  }
+  const out = new BufferGeometry();
+  out.setAttribute('position', new BufferAttribute(new Float32Array(newPos), 3));
+  out.setIndex(new BufferAttribute(newIdx, 1));
+  return out;
+}
+
+/**
+ * Cut a scan with a plane: keeps triangles whose centroid is on the side the
+ * normal points to, then drops fragments left disconnected by the cut.
+ * Coordinates are not changed, so placed landmarks stay valid.
+ */
+export function cutScan(input: BufferGeometry, point: Vector3, normal: Vector3, fragmentFraction = 0.05): { geometry: BufferGeometry; removed: number } {
+  const g = input.getIndex() ? input : mergeVertices(input, 1e-4);
+  const idx = g.getIndex()!.array;
+  const p = g.getAttribute('position').array as ArrayLike<number>;
+  const n = normal.clone().normalize();
+  const d0 = n.dot(point);
+  const keep: number[] = [];
+  for (let t = 0; t < idx.length; t += 3) {
+    let s = 0;
+    for (let k = 0; k < 3; k++) {
+      const v = idx[t + k] * 3;
+      s += n.x * p[v] + n.y * p[v + 1] + n.z * p[v + 2];
+    }
+    if (s / 3 - d0 >= 0) keep.push(idx[t], idx[t + 1], idx[t + 2]);
+  }
+  if (!keep.length) throw new Error('The cut would remove the whole scan.');
+  let out = new BufferGeometry();
+  out.setAttribute('position', g.getAttribute('position'));
+  out.setIndex(new BufferAttribute(new Uint32Array(keep), 1));
+  let removed = idx.length / 3 - keep.length / 3;
+  const r = removeFragments(out, fragmentFraction);
+  out = compactVertices(r.geometry);
+  removed += r.removed;
+  out.computeVertexNormals();
+  out.computeBoundingBox();
+  out.computeBoundingSphere();
   return { geometry: out, removed };
 }

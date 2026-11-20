@@ -17,6 +17,8 @@ export interface ShellGrid {
   f: Float64Array; // rows*cols
   inner: Float64Array; // rows*cols*3
   outer: Float64Array; // rows*cols*3
+  /** Optional scalar per grid vertex, interpolated onto the mesh as attribute `value`. */
+  value?: Float64Array;
 }
 
 const EPS = 1e-7;
@@ -27,6 +29,8 @@ export function buildShell(grid: ShellGrid): BufferGeometry {
   const inside = (k: number, i: number) => f[k * N + i] <= 0;
 
   const pos: number[] = [];
+  const vals: number[] = [];
+  const value = grid.value;
   const tris: number[] = [];
   const cache = new Map<number, number>();
 
@@ -34,6 +38,10 @@ export function buildShell(grid: ShellGrid): BufferGeometry {
     const id = pos.length / 3;
     for (let c = 0; c < 3; c++) pos.push(inner[ax + c] + (inner[bx + c] - inner[ax + c]) * t);
     for (let c = 0; c < 3; c++) pos.push(outer[ax + c] + (outer[bx + c] - outer[ax + c]) * t);
+    if (value) {
+      const v = value[ax / 3] + (value[bx / 3] - value[ax / 3]) * t;
+      vals.push(v, v);
+    }
     return id; // id = inner, id+1 = outer
   };
 
@@ -115,6 +123,7 @@ export function buildShell(grid: ShellGrid): BufferGeometry {
 
   const g = new BufferGeometry();
   g.setAttribute('position', new BufferAttribute(new Float32Array(pos), 3));
+  if (value) g.setAttribute('value', new BufferAttribute(new Float32Array(vals), 1));
   const vcount = pos.length / 3;
   g.setIndex(new BufferAttribute(vcount > 65535 ? new Uint32Array(tris) : new Uint16Array(tris), 1));
   g.computeVertexNormals();

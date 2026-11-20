@@ -9,17 +9,44 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "desktop": "vite build && electron .",
+    "desktop:dist": "vite build && electron-builder"
   },
   "license": "UNLICENSED",
-  "dependencies": {
-    "three": "^0.187.0",
-    "three-mesh-bvh": "^0.9.18"
-  },
   "devDependencies": {
     "@types/three": "^0.187.0",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
+    "three": "^0.187.0",
+    "three-mesh-bvh": "^0.9.18",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
     "vitest": "^5.1.1"
-  }
+  },
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.acmeprint.petbrace",
+    "productName": "PetBrace Studio",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.medical"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Graphics"
+    }
+  },
+  "author": "Acme Printing Co."
 }

@@ -1,13 +1,17 @@
 /** Printable work order / fabrication sheet for a brace case. */
-import { BRACE_TYPES, LANDMARK_LABELS, PARAM_SPECS, type BraceParams, type Material } from '../core/params';
+import { BRACE_TYPES, PARAM_SPECS, type BraceParams, type Material } from '../core/params';
 import type { CaseInfo } from './io';
 import type { CuffPayload, SerializedFrames } from './protocol';
 import { massGrams } from '../core/exporters';
+
+const shapeText = (shape: number[]) =>
+  shape.every((v) => v === 0) ? 'None' : shape.map((v, i) => (v ? `${i * 45}°: ${v > 0 ? '+' : ''}${v} mm` : '')).filter(Boolean).join(', ');
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 export function openWorkOrder(opts: {
   caseInfo: CaseInfo; params: BraceParams; material: Material; cuffs: CuffPayload[]; frames: SerializedFrames; image: string; scanName: string;
+  jointAngle: number; romRange: [number, number] | null;
 }) {
   const { caseInfo: c, params: p, material, cuffs, frames, image } = opts;
   const bt = BRACE_TYPES[p.braceType];
@@ -38,18 +42,19 @@ img{width:100%;border:1px solid #ddd;border-radius:6px;background:#eef2f5}
 <div class="sub">Case ${esc(c.caseId)} · ${esc(c.side)} ${p.braceType === 'carpal' ? 'thoracic' : 'pelvic'} limb · generated ${new Date().toLocaleString()}</div>
 <div class="cols">
 <div><h2>Patient</h2><table>${rows([['Patient', c.patient], ['Species / breed', `${c.species}${c.breed ? ' · ' + c.breed : ''}`], ['Weight', c.weightKg ? c.weightKg + ' kg' : ''], ['Age', c.age], ['Owner', c.owner], ['Diagnosis / indication', c.diagnosis]])}</table></div>
-<div><h2>Clinic</h2><table>${rows([['Clinic', c.clinic], ['Clinician', c.clinician], ['Scan file', opts.scanName], ['Joint angle (deviation from straight)', `${frames.bendAngle.toFixed(0)}°`], ['Joint width (ML)', `${frames.jointWidth.toFixed(1)} mm`], ['Notes', c.notes]])}</table></div>
+<div><h2>Clinic</h2><table>${rows([['Clinic', c.clinic], ['Clinician', c.clinician], ['Scan file', opts.scanName], ['Scanned joint angle (180° = straight)', `${opts.jointAngle.toFixed(0)}°`], ['Hinge range of motion', !p.hinged ? 'Rigid (immobilised)' : opts.romRange ? `${opts.romRange[0].toFixed(0)}°–${opts.romRange[1].toFixed(0)}° (stop pins)` : 'Free'], ['Joint width (ML)', `${frames.jointWidth.toFixed(1)} mm`], ['Notes', c.notes]])}</table></div>
 </div>
 <h2>Design</h2><img src="${image}" alt="Brace design">
 <div class="cols"><div><h2>Parameters</h2><table>${rows(paramRows)}</table></div>
 <div><h2>Parts — ${esc(material.name)}</h2><table><tr><th>Part</th><th>Volume</th><th>Mass</th><th>Triangles</th><th>Mesh</th></tr>${cuffRows}</table>
 <h2>Relief / compression zones</h2><table><tr><th>Zone</th><th>Type</th><th>Amount</th><th>Radius</th></tr>${reliefs}</table>
-<h2>Landmarks</h2><table>${rows(Object.entries(LANDMARK_LABELS).map(([, l]) => [l, 'Placed'] as [string, string]))}</table>
+<h2>Trim line hand edits</h2><table>${rows([['Proximal cuff', shapeText(p.proxTrimShape)], ['Distal cuff', shapeText(p.distTrimShape)]])}</table>
 <h2>Fabrication checklist</h2><table>
 <tr><td>☐ Print parts (100% walls ≥ 4 perimeters, 30–40% infill)</td></tr>
 <tr><td>☐ Deburr edges, open strap slots and vent holes</td></tr>
 <tr><td>☐ Apply ${p.linerOffset} mm foam liner</td></tr>
 ${p.hinged ? `<tr><td>☐ Assemble hinges with ${p.hingeHole} mm rivets / Chicago screws</td></tr>` : ''}
+${p.hinged && p.romStops ? `<tr><td>☐ Fit ${p.stopPinDiameter} mm stop pins through proximal pin hole into distal arc slot (both sides)</td></tr>` : ''}
 <tr><td>☐ Fit straps (${p.strapWidth} mm hook-and-loop)</td></tr>
 <tr><td>☐ Fit check and gait evaluation</td></tr></table></div></div>
 <div class="sign"><div>Designed by</div><div>Approved by (veterinarian)</div></div>

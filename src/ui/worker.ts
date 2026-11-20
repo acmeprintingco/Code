@@ -26,12 +26,13 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
       const cuffs: CuffPayload[] = res.cuffs.map((c) => {
         const position = new Float32Array(c.geometry.getAttribute('position').array);
         const index = Uint32Array.from(c.geometry.getIndex()!.array);
-        transfer.push(position.buffer, index.buffer);
-        return { id: c.id, position, index, check: c.check, missingFraction: c.missingFraction };
+        const gap = new Float32Array(c.geometry.getAttribute('value').array);
+        transfer.push(position.buffer, index.buffer, gap.buffer);
+        return { id: c.id, position, index, gap, check: c.check, missingFraction: c.missingFraction, handles: c.handles };
       });
       const f = res.frames;
       post({
-        type: 'result', reqId: msg.reqId, cuffs, warnings: res.warnings, millis: res.millis,
+        type: 'result', reqId: msg.reqId, cuffs, warnings: res.warnings, millis: res.millis, jointAngle: res.jointAngle, romRange: res.romRange,
         frames: {
           joint: v3(f.joint), hingeAxis: v3(f.hingeAxis), cranial: v3(f.proximal.e1),
           proximalAxis: v3(f.proximal.axis), distalAxis: v3(f.distal.axis),

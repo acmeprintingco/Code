@@ -43,3 +43,20 @@ describe('scan preparation', () => {
     expect(() => generateBrace(scan, { proximal: demo.landmarks.proximal }, defaultParams('hock'))).toThrow(/Missing landmarks/);
   });
 });
+
+describe('scan cutting', () => {
+  it('removes the side of the plane opposite the normal and keeps landmarks valid', async () => {
+    const { cutScan } = await import('../src/core/scan');
+    const demo = makeDemoLimb('hock');
+    const g = prepareScanGeometry(demo.geometry, { units: 'mm', center: false }).geometry;
+    const before = g.getIndex()!.count / 3;
+    // Remove everything above y = 120 mm (e.g. the rest of the body).
+    const { geometry, removed } = cutScan(g, new Vector3(0, 120, 0), new Vector3(0, -1, 0));
+    expect(removed).toBeGreaterThan(100);
+    expect(geometry.getIndex()!.count / 3).toBe(before - removed);
+    geometry.computeBoundingBox();
+    expect(geometry.boundingBox!.max.y).toBeLessThan(122);
+    const res = generateBrace(new ScanModel(geometry), demo.landmarks, { ...defaultParams('hock'), resolution: 1.5 });
+    expect(res.cuffs[0].check.boundaryEdges).toBe(0);
+  });
+});

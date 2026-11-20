@@ -11,8 +11,7 @@
  *   6. Marching-squares solid -> watertight printable mesh
  */
 import { BufferGeometry, Vector3 } from 'three';
-import type { BraceParams } from './params';
-import type { Landmarks } from './params';
+import { TRIM_POINTS, trimShapeAt, type BraceParams, type Landmarks, type Vec3 } from './params';
 import { computeFrames, type CuffFrame, type CuffId, type LimbFrames } from './frames';
 import type { ScanModel } from './scan';
 import { buildShell, checkMesh, type MeshCheck } from './shell';
@@ -25,10 +24,16 @@ export interface CuffResult {
   cols: number;
   /** Rows of scan the rays could not see (filled by interpolation), 0..1. */
   missingFraction: number;
+  /** Draggable trim-line handles on the far edge of the cuff (index into the trim shape). */
+  handles: { index: number; position: Vec3 }[];
 }
 
 export interface BraceResult {
   frames: LimbFrames;
+  /** Joint angle of the scanned limb (deg, 180 = straight, > 180 = hyperextended). */
+  jointAngle: number;
+  /** Joint-angle range the hinge allows when ROM stops are on. */
+  romRange: [number, number] | null;
   cuffs: CuffResult[];
   warnings: string[];
   millis: number;
@@ -68,8 +73,10 @@ interface Cuff {
   thick: Float64Array;
   f: Float64Array;
   fTrim: Float64Array; // field before holes, used for flare
-  rho: Float64Array; // distance of skin point to hinge axis
+  rho: Float64Array; // distance to hinge axis (skin point, then final inner point after flattening)
   side: Int8Array; // +1 lateral half, -1 medial half
+  px: Float64Array; // in-plane hinge coordinates of the final inner point
+  py: Float64Array;
   missing: number;
   trimEndMax: number;
 }
@@ -85,40 +92,123 @@ export function generateBrace(scan: ScanModel, landmarks: Landmarks, params: Bra
     setupCuff(scan, frames, frames.distal, frames.proximal, params),
   ];
   for (const c of cuffs) {
-    if (c.missing > 0.15) warnings.push(`${c.frame.id} cuff: ${(c.missing * 100).toFixed(0)}% of the surface was not visible in the scan and was interpolated.`);
+    if (c.missing > 0.15) warnings.push(`${c.frame.id} cuff: ${(c.missing * 100).toFixed(0)}% of the surface was not in the scan and was interpolated — move the trim landmark inside the scanned area or rescan.`);
     prepareInner(c, frames, params);
   }
   if (params.hinged) flattenHinges(cuffs, frames, params);
-  for (const c of cuffs) buildFields(c, frames, params);
+
+  const { jointAngle, flexSign } = jointAngleOf(frames, params);
+  let rom: Rom | null = null;
+  let romRange: [number, number] | null = null;
+  if (params.hinged && params.romStops) {
+    let lo = params.romFlexion - jointAngle;
+    let hi = params.romExtension - jointAngle;
+    if (lo > hi) [lo, hi] = [hi, lo];
+    if (lo > 0 || hi < 0) {
+      warnings.push(`The scanned joint angle (${jointAngle.toFixed(0)}°) is outside the ROM limits; the slot was extended so the brace can still be fitted in the scanned pose.`);
+      lo = Math.min(lo, 0);
+      hi = Math.max(hi, 0);
+    }
+    const a = (flexSign * lo * Math.PI) / 180, b = (flexSign * hi * Math.PI) / 180;
+    rom = { psiA: Math.min(a, b), psiB: Math.max(a, b), rStop: stopRadius(params) };
+    romRange = [jointAngle + lo, jointAngle + hi];
+  }
+  for (const c of cuffs) buildFields(c, frames, params, rom);
   applyFlare(cuffs, params);
 
   const results: CuffResult[] = cuffs.map((c) => {
-    const { inner, outer } = surfaces(c);
-    const geometry = buildShell({ cols: c.N, rows: c.M, f: c.f, inner, outer });
+    const { inner, outer } = surfaces(c, params);
+    const gap = new Float64Array(c.rin.length);
+    for (let j = 0; j < gap.length; j++) gap[j] = c.rin[j] - c.rs[j];
+    const geometry = buildShell({ cols: c.N, rows: c.M, f: c.f, inner, outer, value: gap });
     const check = checkMesh(geometry);
     if (check.boundaryEdges || check.nonManifoldEdges) warnings.push(`${c.frame.id} cuff mesh is not closed (${check.boundaryEdges} open edges).`);
-    return { id: c.frame.id, geometry, check, rows: c.M, cols: c.N, missingFraction: c.missing };
+    return { id: c.frame.id, geometry, check, rows: c.M, cols: c.N, missingFraction: c.missing, handles: trimHandles(c, params, outer) };
   });
 
-  return { frames, cuffs: results, warnings, millis: performance.now() - t0 };
+  return { frames, jointAngle, romRange, cuffs: results, warnings, millis: performance.now() - t0 };
+}
+
+interface Rom {
+  psiA: number;
+  psiB: number;
+  rStop: number;
+}
+
+/** Radius of the stop pin circle around the hinge axis. */
+function stopRadius(p: BraceParams) {
+  return p.hingeHole / 2 + 2.5 + p.stopPinDiameter / 2;
+}
+
+/** Hinge tab radius, enlarged when ROM stops need room for the pin and slot. */
+export function effectiveHingeRadius(p: BraceParams): number {
+  if (!p.hinged || !p.romStops) return p.hingeRadius;
+  return Math.max(p.hingeRadius, stopRadius(p) + p.stopPinDiameter / 2 + 3.5);
+}
+
+/**
+ * Scanned joint angle (180° = straight) and the rotation sign of flexion about the
+ * hinge axis. Flexion moves the distal segment caudally at the stifle and carpus
+ * and cranially at the hock.
+ */
+function jointAngleOf(frames: LimbFrames, p: BraceParams): { jointAngle: number; flexSign: number } {
+  const ha = frames.hingeAxis;
+  const ap = frames.proximal.axis, ad = frames.distal.axis;
+  const straight = ap.clone().negate();
+  const raw = Math.atan2(new Vector3().crossVectors(straight, ad).dot(ha), straight.dot(ad));
+  const flexDir = frames.proximal.e1.clone().multiplyScalar(p.braceType === 'hock' ? 1 : -1);
+  const flexSign = new Vector3().crossVectors(ha, ad).dot(flexDir) >= 0 ? 1 : -1;
+  return { jointAngle: 180 - (flexSign * raw * 180) / Math.PI, flexSign };
+}
+
+/** Lowest / highest trim height around the limb. */
+function trimRange(frame: CuffFrame, p: BraceParams): { min: number; max: number } {
+  let min = Infinity, max = -Infinity;
+  for (let a = 0; a < 72; a++) {
+    const v = trimEnd(frame, p, (a / 72) * TAU);
+    min = Math.min(min, v);
+    max = Math.max(max, v);
+  }
+  return { min, max };
+}
+
+/** Handle positions on the far trim edge at each trim-shape control angle, skipping the opening. */
+function trimHandles(c: Cuff, p: BraceParams, outer: Float64Array): { index: number; position: Vec3 }[] {
+  const fr = c.frame;
+  const isProx = fr.id === 'proximal';
+  const openHalf = (isProx ? p.openingWidthProx : p.openingWidthDist) / 2;
+  const out: { index: number; position: Vec3 }[] = [];
+  for (let n = 0; n < TRIM_POINTS; n++) {
+    const deg = (n * 360) / TRIM_POINTS;
+    const dd = Math.abs(((deg - p.openingCenter) % 360 + 540) % 360 - 180);
+    if (openHalf > 0 && dd < openHalf + 8) continue;
+    const thU = (deg * Math.PI) / 180;
+    const th = fr.lateralSign * thU;
+    const i = ((Math.round(th / c.dTheta) % c.N) + c.N) % c.N;
+    // Walk down from the far end to the last material vertex in this column.
+    let k = Math.min(c.M - 1, Math.round((trimEnd(fr, p, thU) - c.hMin) / c.dh));
+    while (k > 0 && c.fTrim[k * c.N + i] > 0) k--;
+    const j = k * c.N + i;
+    out.push({ index: n, position: [outer[3 * j], outer[3 * j + 1], outer[3 * j + 2]] });
+  }
+  return out;
 }
 
 function trimEnd(frame: CuffFrame, p: BraceParams, thetaUser: number): number {
   const isProx = frame.id === 'proximal';
   const off = isProx ? p.proxTrimOffset : p.distTrimOffset;
   const tilt = isProx ? p.proxTrimTilt : p.distTrimTilt;
-  return frame.length + off + tilt * Math.cos(thetaUser - Math.PI / 2);
+  const shape = trimShapeAt(isProx ? p.proxTrimShape : p.distTrimShape, thetaUser);
+  return frame.length + off + tilt * Math.cos(thetaUser - Math.PI / 2) + shape;
 }
 
 function setupCuff(scan: ScanModel, frames: LimbFrames, frame: CuffFrame, other: CuffFrame, p: BraceParams): Cuff {
   const res = p.resolution;
-  const isProx = frame.id === 'proximal';
-  const tilt = Math.abs(isProx ? p.proxTrimTilt : p.distTrimTilt);
-  const trimEndMax = frame.length + (isProx ? p.proxTrimOffset : p.distTrimOffset) + tilt;
+  const trimEndMax = trimRange(frame, p).max;
   const rEst = Math.max(frame.meanRadius, frames.jointWidth / 2) * 1.6 + p.linerOffset;
   let hMin: number;
   if (p.hinged) {
-    hMin = -(p.hingeRadius + p.hingeBossThickness + 3 * res + 2);
+    hMin = -(effectiveHingeRadius(p) + p.hingeBossThickness + 3 * res + 2);
   } else {
     const half = Math.min((frames.bendAngle * Math.PI) / 360, Math.PI / 3);
     hMin = -(rEst * Math.tan(half) + p.rigidOverlap + 3 * res + 2);
@@ -173,6 +263,7 @@ function setupCuff(scan: ScanModel, frames: LimbFrames, frame: CuffFrame, other:
     frame, other, N, M, hMin, dh, dTheta, rs,
     rin: new Float64Array(M * N), thick: new Float64Array(M * N).fill(p.wallThickness),
     f: new Float64Array(M * N), fTrim: new Float64Array(M * N), rho: new Float64Array(M * N), side: new Int8Array(M * N),
+    px: new Float64Array(M * N), py: new Float64Array(M * N),
     missing: missing / rs.length, trimEndMax,
   };
 }
@@ -290,7 +381,7 @@ function prepareInner(c: Cuff, frames: LimbFrames, p: BraceParams) {
 }
 
 /** Material field: trim band, hinge tabs, opening, strap slots, rivet hole, vent holes. */
-function buildFields(c: Cuff, frames: LimbFrames, p: BraceParams) {
+function buildFields(c: Cuff, frames: LimbFrames, p: BraceParams, rom: Rom | null) {
   const { frame: fr, other, N, M } = c;
   const J = frames.joint;
   const ha = frames.hingeAxis;
@@ -300,14 +391,14 @@ function buildFields(c: Cuff, frames: LimbFrames, p: BraceParams) {
   const openHalf = ((isProx ? p.openingWidthProx : p.openingWidthDist) * Math.PI) / 360;
   const thLat = Math.atan2(ha.dot(fr.e2), ha.dot(fr.e1));
   const thMed = thLat + Math.PI;
-  const R = p.hingeRadius;
+  const R = effectiveHingeRadius(p);
   const bis = fr.axis.clone().sub(other.axis).normalize();
 
   // Strap rows, spaced so that slots never merge.
   const strapH: number[] = [];
   if (p.strapsPerCuff > 0 && openHalf > 0) {
     const lo = (p.hinged ? p.jointGap : 0) + p.strapWidth / 2 + 5;
-    const hiTrim = fr.length + (isProx ? p.proxTrimOffset : p.distTrimOffset) - Math.abs(isProx ? p.proxTrimTilt : p.distTrimTilt);
+    const hiTrim = trimRange(fr, p).min;
     const hi = hiTrim - p.strapWidth / 2 - 5;
     const fit = hi > lo ? Math.floor((hi - lo) / (p.strapWidth + 8)) + 1 : 1;
     const n = Math.max(1, Math.min(p.strapsPerCuff, fit));
@@ -348,11 +439,33 @@ function buildFields(c: Cuff, frames: LimbFrames, p: BraceParams) {
         fv = Math.max(fv, -slot);
       }
       if (p.hinged && p.hingeHole > 0) fv = Math.max(fv, p.hingeHole / 2 - c.rho[j]);
+      if (rom) fv = Math.max(fv, -romCut(c.px[j], c.py[j], isProx, rom, p));
       c.f[j] = fv;
     }
   }
 
   if (p.perforate) perforate(c, p);
+}
+
+/**
+ * Signed distance to the ROM stop feature in hinge-plane coordinates (negative = cut).
+ * Proximal pad: a round hole for the stop pin at angle 0 (toward the proximal segment).
+ * Distal pad: an arc slot the pin travels in, spanning the allowed joint angles.
+ */
+function romCut(x: number, y: number, isProx: boolean, rom: Rom, p: BraceParams): number {
+  const r = p.stopPinDiameter / 2;
+  if (isProx) return Math.hypot(x - rom.rStop, y) - r;
+  const rho = Math.hypot(x, y);
+  const mid = (rom.psiA + rom.psiB) / 2;
+  const half = (rom.psiB - rom.psiA) / 2;
+  const psi = angDiff(Math.atan2(y, x), mid);
+  let d: number;
+  if (Math.abs(psi) <= half) d = Math.abs(rho - rom.rStop);
+  else {
+    const e = mid + Math.sign(psi) * half;
+    d = Math.hypot(x - rom.rStop * Math.cos(e), y - rom.rStop * Math.sin(e));
+  }
+  return d - (r + 0.3);
 }
 
 /** Staggered ventilation holes placed only where the shell is solid enough. */
@@ -394,7 +507,7 @@ function perforate(c: Cuff, p: BraceParams) {
     for (let col = 0; col < cols; col++) {
       const th = (col + (q & 1 ? 0.5 : 0)) * dAng;
       // Check the centre and a ring of points around it.
-      let ok = sampleF(h, th) < -need && sampleRho(h, th) > p.hingeRadius + need;
+      let ok = sampleF(h, th) < -need && (!p.hinged || sampleRho(h, th) > effectiveHingeRadius(p) + need);
       for (let a = 0; ok && a < 8; a++) {
         const ang = (a / 8) * TAU;
         const dh = Math.sin(ang) * holeR;
@@ -439,8 +552,12 @@ function perforate(c: Cuff, p: BraceParams) {
 function flattenHinges(cuffs: Cuff[], frames: LimbFrames, p: BraceParams) {
   const J = frames.joint;
   const ha = frames.hingeAxis;
-  const R = p.hingeRadius;
+  const R = effectiveHingeRadius(p);
   const flatR = R + 2;
+  // In-plane basis for hinge coordinates: u toward the proximal segment, v = ha × u.
+  const ap = frames.proximal.axis;
+  const u = ap.clone().addScaledVector(ha, -ap.dot(ha)).normalize();
+  const v = new Vector3().crossVectors(ha, u);
   const blend = Math.max(5, R * 0.6);
   const o = new Vector3(), d = new Vector3(), q = new Vector3();
   const dMax: Record<number, number> = { 1: -Infinity, [-1]: -Infinity };
@@ -481,8 +598,9 @@ function flattenHinges(cuffs: Cuff[], frames: LimbFrames, p: BraceParams) {
           }
         }
         q.copy(oJ).addScaledVector(d, c.rin[j]);
-        const along = q.dot(ha);
-        c.rho[j] = Math.sqrt(Math.max(0, q.lengthSq() - along * along));
+        c.px[j] = q.dot(u);
+        c.py[j] = q.dot(v);
+        c.rho[j] = Math.hypot(c.px[j], c.py[j]);
       }
     }
   }
@@ -494,14 +612,17 @@ function applyFlare(cuffs: Cuff[], p: BraceParams) {
     for (let j = 0; j < c.f.length; j++) {
       const ft = c.fTrim[j];
       if (ft <= -p.flareWidth) continue;
-      const near = p.hinged ? smoothstep(p.hingeRadius + 2, p.hingeRadius * 1.6 + 9, c.rho[j]) : 1;
+      const R = effectiveHingeRadius(p);
+      const near = p.hinged ? smoothstep(R + 2, R * 1.6 + 9, c.rho[j]) : 1;
       const t = Math.min(1, 1 + ft / p.flareWidth);
       c.rin[j] += p.edgeFlare * t * t * near;
     }
   }
 }
 
-function surfaces(c: Cuff): { inner: Float64Array; outer: Float64Array } {
+function surfaces(c: Cuff, p: BraceParams): { inner: Float64Array; outer: Float64Array } {
+  const R = effectiveHingeRadius(p);
+  const er = p.edgeRounding;
   const { N, M, frame: fr } = c;
   const inner = new Float64Array(M * N * 3);
   const outer = new Float64Array(M * N * 3);
@@ -530,7 +651,12 @@ function surfaces(c: Cuff): { inner: Float64Array; outer: Float64Array } {
         dirAt(fr, i * c.dTheta, n);
       } else n.multiplyScalar(1 / len);
       const j = k * N + i;
-      const t = c.thick[j];
+      let t = c.thick[j];
+      // Rolled edge: a quarter-round taper of the outer surface toward each cut edge.
+      if (er > 0 && c.f[j] > -er && (!p.hinged || c.rho[j] > R + 3)) {
+        const x = Math.min(1, Math.max(0, -c.f[j] / er));
+        t *= 0.4 + 0.6 * Math.sqrt(1 - (1 - x) * (1 - x));
+      }
       outer[3 * j] = inner[3 * j] + n.x * t;
       outer[3 * j + 1] = inner[3 * j + 1] + n.y * t;
       outer[3 * j + 2] = inner[3 * j + 2] + n.z * t;

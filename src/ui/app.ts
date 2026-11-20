@@ -5,16 +5,17 @@ import {
   type BraceParams, type BraceType, type LandmarkId, type Landmarks, type ParamSpec, type Relief,
 } from '../core/params';
 import { missingLandmarks } from '../core/frames';
-import { guessUnits, prepareScanGeometry, type Units } from '../core/scan';
+import { cutScan, guessUnits, prepareScanGeometry, type Units } from '../core/scan';
 import { makeDemoLimb } from '../core/demoLimb';
 import { massGrams, toBinarySTL } from '../core/exporters';
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { Viewer, type ViewName } from './viewer';
+import { GAP_STOPS, Viewer, type TrimHandle, type ViewName } from './viewer';
 import { SCAN_ACCEPT, download, emptyCase, parseProject, pickFile, readScanFile, safeName, serializeProject, type CaseInfo } from './io';
 import { openWorkOrder } from './report';
 import type { CuffPayload, FromWorker, SerializedFrames, ToWorker } from './protocol';
 
-type Pick = { kind: 'landmark'; id: LandmarkId } | { kind: 'relief' } | null;
+type Pick = { kind: 'landmark'; id: LandmarkId } | { kind: 'relief' } | { kind: 'cut' } | null;
+type Vec3 = [number, number, number];
 
 const RELIEF_PRESETS: Record<BraceType, string[]> = {
   stifle: ['Patella', 'Fibular head', 'Tibial tuberosity', 'Medial tibial condyle', 'Lateral femoral condyle'],
@@ -40,7 +41,12 @@ export class App {
   private params: BraceParams = defaultParams('stifle');
   private landmarks: Landmarks = {};
   private scan: { name: string; units: Units; geometry: BufferGeometry } | null = null;
-  private result: { cuffs: CuffPayload[]; frames: SerializedFrames; warnings: string[]; millis: number } | null = null;
+  private result: { cuffs: CuffPayload[]; frames: SerializedFrames; warnings: string[]; millis: number; jointAngle: number; romRange: [number, number] | null } | null = null;
+  private gapMap = false;
+  private showHandles = true;
+  private cutPending: { point: Vec3; normal: Vec3 } | null = null;
+  private cutHistory: BufferGeometry[] = [];
+  private legend!: HTMLElement;
   private pick: Pick = null;
   private selectedRelief: string | null = null;
   private materialIdx = 0;
@@ -66,8 +72,11 @@ export class App {
     this.buildLayout();
     this.renderSidebar();
     window.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && this.pick) this.setPick(null);
+      if (e.key !== 'Escape') return;
+      if (this.pick) this.setPick(null);
+      if (this.cutPending) this.cancelCut();
     });
+    this.viewer.onHandleDrag = (cuff, index, delta) => this.dragTrim(cuff, index, delta);
   }
 
   // ---------------------------------------------------------------- layout
@@ -89,11 +98,16 @@ export class App {
     const slider = (label: string, init: number, fn: (v: number) => void) =>
       h('label', {}, label, h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: init, oninput: (e: Event) => fn(+(e.target as HTMLInputElement).value) }));
     const axes = h('input', { type: 'checkbox', checked: true, onchange: (e: Event) => this.viewer.setAxesVisible((e.target as HTMLInputElement).checked) });
+    const gap = h('input', { type: 'checkbox', checked: this.gapMap, onchange: (e: Event) => { this.gapMap = (e.target as HTMLInputElement).checked; this.updateGapMap(); } });
+    const handles = h('input', { type: 'checkbox', checked: this.showHandles, onchange: (e: Event) => { this.showHandles = (e.target as HTMLInputElement).checked; this.viewer.setHandlesVisible(this.showHandles); } });
     vp.append(h('div', { class: 'vp-toolbar' },
       h('div', { class: 'vp-card' }, view('fit', 'Fit'), view('lateral', 'Lateral'), view('medial', 'Medial'), view('cranial', 'Cranial'), view('caudal', 'Caudal')),
       h('div', { class: 'sep' }),
-      h('div', { class: 'vp-card' }, slider('Scan', 1, (v) => this.viewer.setScanOpacity(v)), slider('Brace', 1, (v) => this.viewer.setBraceOpacity(v)), h('label', {}, axes, 'Axes')),
+      h('div', { class: 'vp-card' }, slider('Scan', 1, (v) => this.viewer.setScanOpacity(v)), slider('Brace', 1, (v) => this.viewer.setBraceOpacity(v)), h('label', {}, axes, 'Axes'),
+        h('label', { title: 'Drag the round handles on the cuff edges to reshape the trim line' }, handles, 'Trim handles'), h('label', { title: 'Colour the brace by skin-to-shell gap' }, gap, 'Gap map')),
     ));
+    this.legend = h('div', { class: 'legend' });
+    vp.append(this.legend);
     this.empty = h('div', { class: 'vp-empty' }, h('div', {}, h('b', {}, 'No scan loaded'), 'Import an STL, OBJ or PLY limb scan, or load a demo limb.'));
     this.banner = h('div', { class: 'vp-banner' });
     this.busy = h('div', { class: 'busy' }, 'Generating brace…');
@@ -183,10 +197,31 @@ export class App {
       );
       if (Math.max(s.x, s.y, s.z) > 1500 || Math.max(s.x, s.y, s.z) < 40) out.push(h('div', { class: 'note' }, 'The scan size looks unusual for a limb — check the file units.'));
     }
+    if (this.scan) out.push(...this.cutTools());
     out.push(h('p', { class: 'hint' }, 'Scan the limb in a natural standing position. Small disconnected fragments (floor, hair, other limbs) are removed automatically.'));
     out.push(h('div', { class: 'btns' }, h('span', { class: 'hint' }, 'Demo limb:'),
       ...(Object.keys(BRACE_TYPES) as BraceType[]).map((t) => h('button', { class: 'btn small', onclick: () => this.loadDemo(t) }, BRACE_TYPES[t].label.split(' ')[0]))));
     return out;
+  }
+
+  private cutTools(): HTMLElement[] {
+    const box = h('div', { class: 'toolbox' }, h('div', { class: 'tb-title' }, 'Clean up scan'));
+    if (this.cutPending) {
+      box.append(
+        h('p', { class: 'hint' }, 'Red plane shows the cut. Which side should be removed?'),
+        h('div', { class: 'btns' },
+          h('button', { class: 'btn primary', onclick: () => this.applyCut(true) }, 'Remove above'),
+          h('button', { class: 'btn primary', onclick: () => this.applyCut(false) }, 'Remove below'),
+          h('button', { class: 'btn', onclick: () => this.cancelCut() }, 'Cancel')));
+    } else {
+      const cutting = this.pick?.kind === 'cut';
+      box.append(
+        h('p', { class: 'hint' }, 'Rotate the view so the unwanted part (body, floor, paw) is above or below the limb, then click where to cut. The cut runs horizontally across the screen.'),
+        h('div', { class: 'btns' },
+          h('button', { class: `btn${cutting ? ' active' : ''}`, onclick: () => this.setPick(cutting ? null : { kind: 'cut' }) }, cutting ? 'Click on scan… (Esc)' : 'Cut with plane'),
+          h('button', { class: 'btn', disabled: !this.cutHistory.length, onclick: () => this.undoCut() }, `Undo cut${this.cutHistory.length ? ` (${this.cutHistory.length})` : ''}`)));
+    }
+    return [box];
   }
 
   private landmarkStep(): HTMLElement[] {
@@ -225,6 +260,14 @@ export class App {
       out.push(det);
     }
     const ready = !!this.scan && missingLandmarks(this.landmarks).length === 0;
+    const edited = this.params.proxTrimShape.some((v) => v !== 0) || this.params.distTrimShape.some((v) => v !== 0);
+    out.splice(3, 0, h('div', { class: 'toolbox' }, h('div', { class: 'tb-title' }, 'Trim line editing'),
+      h('p', { class: 'hint' }, 'Drag the round white handles on the cuff edges in the 3D view up or down to reshape the trim line. Handles are hidden inside the donning opening.'),
+      h('div', { class: 'btns' }, h('button', { class: 'btn small', disabled: !edited, onclick: () => { this.params.proxTrimShape = this.params.proxTrimShape.map(() => 0); this.params.distTrimShape = this.params.distTrimShape.map(() => 0); this.renderSidebar(); this.scheduleGenerate(0); } }, 'Reset hand edits'))));
+    if (this.result) {
+      const r = this.result;
+      out.push(h('p', { class: 'hint' }, `Scanned joint angle: ${r.jointAngle.toFixed(0)}° (180° = straight).${r.romRange ? ` Hinge allows ${r.romRange[0].toFixed(0)}°–${r.romRange[1].toFixed(0)}°.` : ''}`));
+    }
     out.push(
       h('div', { class: 'row' }, h('label', {}, 'Update automatically'), h('input', { type: 'checkbox', checked: this.autoUpdate, onchange: (e: Event) => (this.autoUpdate = (e.target as HTMLInputElement).checked) })),
       h('div', { class: 'btns' },
@@ -293,7 +336,7 @@ export class App {
     const f = this.result.frames;
     const out: HTMLElement[] = [
       h('table', { class: 'stats' }, h('tr', {}, h('th', {}, 'Part'), h('th', {}, 'Volume'), h('th', {}, 'Mass'), h('th', {}, 'Mesh')), ...rows),
-      h('p', { class: 'hint' }, `Total ≈ ${totalG.toFixed(0)} g in ${mat.name}. Joint deviation ${f.bendAngle.toFixed(0)}°, joint width ${f.jointWidth.toFixed(1)} mm. Generated in ${this.result.millis.toFixed(0)} ms.`),
+      h('p', { class: 'hint' }, `Total ≈ ${totalG.toFixed(0)} g in ${mat.name}. Scanned joint angle ${this.result.jointAngle.toFixed(0)}°, joint width ${f.jointWidth.toFixed(1)} mm.${this.result.romRange ? ` ROM stops: ${this.result.romRange[0].toFixed(0)}°–${this.result.romRange[1].toFixed(0)}° (add ${this.params.stopPinDiameter} mm stop pins).` : ''} Generated in ${this.result.millis.toFixed(0)} ms.`),
       h('div', { class: 'row' }, h('label', {}, 'Material'), h('select', { onchange: (e: Event) => { this.materialIdx = +(e.target as HTMLSelectElement).value; this.renderSidebar(); } },
         ...MATERIALS.map((m, i) => h('option', { value: i, selected: i === this.materialIdx }, m.name)))),
       h('p', { class: 'hint' }, mat.note),
@@ -340,6 +383,9 @@ export class App {
     const { geometry, removedTriangles } = prepareScanGeometry(raw, { units, fragmentFraction: 0.05, center });
     this.scan = { name, units, geometry };
     this.landmarks = landmarks;
+    this.cutHistory = [];
+    this.cutPending = null;
+    this.viewer.showCutPlane(null);
     this.result = null;
     this.viewer.setBrace([]);
     this.viewer.setFrames(null);
@@ -384,6 +430,14 @@ export class App {
           this.openSteps.add('design');
           this.scheduleGenerate(0);
         }
+      };
+    } else if (p.kind === 'cut') {
+      this.banner.textContent = 'Click the scan where the cut should go — the plane runs horizontally across the screen (Esc to cancel)';
+      this.banner.classList.add('show');
+      this.viewer.onPick = (pt) => {
+        this.cutPending = { point: pt, normal: this.viewer.screenUp() };
+        this.viewer.showCutPlane(pt, this.cutPending.normal);
+        this.setPick(null);
       };
     } else {
       this.banner.textContent = 'Click the scan to place a relief / pressure zone (Esc to cancel)';
@@ -434,13 +488,84 @@ export class App {
       return;
     }
     const first = !this.result;
-    this.result = { cuffs: m.cuffs, frames: m.frames, warnings: m.warnings, millis: m.millis };
+    this.result = { cuffs: m.cuffs, frames: m.frames, warnings: m.warnings, millis: m.millis, jointAngle: m.jointAngle, romRange: m.romRange };
     this.viewer.setBrace(m.cuffs.map((c) => ({ id: c.id, geometry: toCreasedNormals(toGeometry(c), Math.PI / 5) })));
     this.viewer.setFrames(m.frames);
+    const handles: TrimHandle[] = m.cuffs.flatMap((c) => c.handles.map((hd) => ({ cuff: c.id, index: hd.index, position: hd.position, axis: c.id === 'proximal' ? m.frames.proximalAxis : m.frames.distalAxis })));
+    this.viewer.setHandles(handles);
+    this.viewer.setHandlesVisible(this.showHandles);
+    this.updateGapMap();
     if (first) this.viewer.setView('fit');
     const tris = m.cuffs.reduce((s, c) => s + c.check.triangles, 0);
     this.status(`Brace generated in ${m.millis.toFixed(0)} ms · ${tris.toLocaleString()} triangles.`, m.warnings.join(' '));
     this.renderSidebar();
+  }
+
+  private updateGapMap() {
+    this.viewer.setGapMap(this.gapMap, this.params.linerOffset);
+    if (!this.gapMap) {
+      this.legend.classList.remove('show');
+      return;
+    }
+    const L = this.params.linerOffset;
+    const grad = GAP_STOPS.map(([x, c]) => `rgb(${c.map((v) => Math.round(v * 255)).join(',')}) ${((x - GAP_STOPS[0][0]) / (GAP_STOPS[GAP_STOPS.length - 1][0] - GAP_STOPS[0][0])) * 100}%`).join(',');
+    this.legend.replaceChildren(
+      h('div', { class: 'lg-title' }, 'Skin-to-shell gap'),
+      h('div', { class: 'lg-bar', style: `background: linear-gradient(90deg, ${grad})` }),
+      h('div', { class: 'lg-scale' }, h('span', {}, `≤${(L - 2).toFixed(1)}`), h('span', {}, `${L.toFixed(1)} mm`), h('span', {}, `≥${(L + 5).toFixed(1)}`)),
+      h('div', { class: 'lg-scale' }, h('span', {}, 'tight'), h('span', {}, 'liner'), h('span', {}, 'loose')));
+    this.legend.classList.add('show');
+  }
+
+  private dragTrim(cuff: 'proximal' | 'distal', index: number, delta: number) {
+    const key = cuff === 'proximal' ? 'proxTrimShape' : 'distTrimShape';
+    const shape = [...this.params[key]];
+    shape[index] = Math.round((shape[index] + delta) * 2) / 2;
+    this.params[key] = shape;
+    this.status(`Trim line ${cuff} @ ${index * 45}°: ${shape[index] > 0 ? '+' : ''}${shape[index]} mm`);
+    this.renderSidebar();
+    this.scheduleGenerate(0);
+  }
+
+  private applyCut(removeAbove: boolean) {
+    if (!this.scan || !this.cutPending) return;
+    const n = new Vector3(...this.cutPending.normal);
+    if (removeAbove) n.negate();
+    try {
+      const { geometry, removed } = cutScan(this.scan.geometry, new Vector3(...this.cutPending.point), n);
+      this.cutHistory.push(this.scan.geometry);
+      if (this.cutHistory.length > 8) this.cutHistory.shift();
+      this.replaceScanGeometry(geometry);
+      this.status(`Cut removed ${removed.toLocaleString()} triangles.`);
+    } catch (err) {
+      this.status('Cut failed.', err instanceof Error ? err.message : String(err));
+    }
+    this.cancelCut();
+  }
+
+  private cancelCut() {
+    this.cutPending = null;
+    this.viewer.showCutPlane(null);
+    this.renderSidebar();
+  }
+
+  private undoCut() {
+    const prev = this.cutHistory.pop();
+    if (!prev) return;
+    this.replaceScanGeometry(prev);
+    this.status('Cut undone.');
+    this.renderSidebar();
+  }
+
+  /** Swap the scan mesh in place (after a cut), keeping landmarks, design and view. */
+  private replaceScanGeometry(geometry: BufferGeometry) {
+    if (!this.scan) return;
+    this.scan.geometry = geometry;
+    this.viewer.setScan(geometry, true);
+    const pos = new Float32Array(geometry.getAttribute('position').array);
+    const idx = Uint32Array.from(geometry.getIndex()!.array);
+    this.post({ type: 'scan', position: pos, index: idx }, [pos.buffer, idx.buffer]);
+    this.scheduleGenerate(0);
   }
 
   private exportSTL(ids: ('proximal' | 'distal')[]) {
@@ -466,7 +591,7 @@ export class App {
   private workOrder() {
     if (!this.result) return;
     try {
-      openWorkOrder({ caseInfo: this.caseInfo, params: this.params, material: MATERIALS[this.materialIdx], cuffs: this.result.cuffs, frames: this.result.frames, image: this.viewer.screenshot(), scanName: this.scan?.name ?? '' });
+      openWorkOrder({ caseInfo: this.caseInfo, params: this.params, material: MATERIALS[this.materialIdx], cuffs: this.result.cuffs, frames: this.result.frames, image: this.viewer.screenshot(), scanName: this.scan?.name ?? '', jointAngle: this.result.jointAngle, romRange: this.result.romRange });
     } catch (err) {
       this.status('Could not open work order.', err instanceof Error ? err.message : String(err));
     }
@@ -505,6 +630,7 @@ function toGeometry(c: CuffPayload): BufferGeometry {
   const g = new BufferGeometry();
   g.setAttribute('position', new BufferAttribute(new Float32Array(c.position), 3));
   g.setIndex(new BufferAttribute(new Uint32Array(c.index), 1));
+  g.setAttribute('gap', new BufferAttribute(new Float32Array(c.gap), 1));
   g.computeVertexNormals();
   return g;
 }

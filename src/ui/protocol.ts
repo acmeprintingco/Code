@@ -20,6 +20,9 @@ export interface CuffPayload {
   index: Uint32Array;
   check: MeshCheck;
   missingFraction: number;
+  /** Skin-to-shell gap (mm) per vertex. */
+  gap: Float32Array;
+  handles: { index: number; position: Vec3 }[];
 }
 
 export type ToWorker =
@@ -28,5 +31,5 @@ export type ToWorker =
 
 export type FromWorker =
   | { type: 'scanReady' }
-  | { type: 'result'; reqId: number; cuffs: CuffPayload[]; frames: SerializedFrames; warnings: string[]; millis: number }
+  | { type: 'result'; reqId: number; cuffs: CuffPayload[]; frames: SerializedFrames; warnings: string[]; millis: number; jointAngle: number; romRange: [number, number] | null }
   | { type: 'error'; reqId: number; message: string };

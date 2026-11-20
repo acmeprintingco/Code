@@ -31,6 +31,7 @@ export interface BraceParams {
 
   // Shell
   wallThickness: number;
+  edgeRounding: number;
   resolution: number;
 
   // Trim lines (relative to the proximal / distal landmarks)
@@ -38,6 +39,9 @@ export interface BraceParams {
   proxTrimTilt: number;
   distTrimOffset: number;
   distTrimTilt: number;
+  /** Hand-edited trim line: offsets (mm) at 8 points around the limb, 0° = cranial, 45° steps toward lateral. */
+  proxTrimShape: number[];
+  distTrimShape: number[];
 
   // Joint / hinge
   hinged: boolean;
@@ -47,6 +51,13 @@ export interface BraceParams {
   hingeBossThickness: number;
   hingeClearance: number;
   rigidOverlap: number;
+  /** Range-of-motion stops: a pin on the proximal pad runs in an arc slot in the distal pad. */
+  romStops: boolean;
+  /** Most flexed joint angle allowed (deg, 180 = straight). */
+  romFlexion: number;
+  /** Most extended joint angle allowed (deg, >180 = hyperextension). */
+  romExtension: number;
+  stopPinDiameter: number;
 
   // Opening for donning
   openingCenter: number;
@@ -134,11 +145,14 @@ const BASE: Omit<BraceParams, 'braceType'> = {
   edgeFlare: 2,
   flareWidth: 8,
   wallThickness: 3.5,
+  edgeRounding: 1.5,
   resolution: 1.25,
   proxTrimOffset: 0,
   proxTrimTilt: 0,
   distTrimOffset: 0,
   distTrimTilt: 0,
+  proxTrimShape: [],
+  distTrimShape: [],
   hinged: true,
   jointGap: 12,
   hingeRadius: 11,
@@ -146,6 +160,10 @@ const BASE: Omit<BraceParams, 'braceType'> = {
   hingeBossThickness: 4.5,
   hingeClearance: 0.4,
   rigidOverlap: 1.5,
+  romStops: false,
+  romFlexion: 80,
+  romExtension: 150,
+  stopPinDiameter: 3,
   openingCenter: 0,
   openingWidthProx: 70,
   openingWidthDist: 70,
@@ -160,18 +178,39 @@ const BASE: Omit<BraceParams, 'braceType'> = {
   reliefs: [],
 };
 
+export const TRIM_POINTS = 8;
+
 export function defaultParams(braceType: BraceType): BraceParams {
+  const p = presetParams(braceType);
+  p.proxTrimShape = new Array(TRIM_POINTS).fill(0);
+  p.distTrimShape = new Array(TRIM_POINTS).fill(0);
+  return p;
+}
+
+/** Periodic Catmull-Rom interpolation of a trim shape at a user angle (radians, 0 = cranial, +π/2 = lateral). */
+export function trimShapeAt(shape: number[] | undefined, thetaUser: number): number {
+  if (!shape || !shape.length) return 0;
+  const n = shape.length;
+  let x = ((thetaUser / (Math.PI * 2)) * n) % n;
+  if (x < 0) x += n;
+  const i1 = Math.floor(x) % n;
+  const t = x - Math.floor(x);
+  const p0 = shape[(i1 - 1 + n) % n], p1 = shape[i1], p2 = shape[(i1 + 1) % n], p3 = shape[(i1 + 2) % n];
+  return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t);
+}
+
+function presetParams(braceType: BraceType): BraceParams {
   switch (braceType) {
     case 'stifle':
-      return { ...BASE, braceType, proxTrimTilt: 8, openingCenter: 0, openingWidthProx: 80, openingWidthDist: 70, reliefs: [] };
+      return { ...BASE, braceType, proxTrimTilt: 8, romFlexion: 80, romExtension: 150, openingCenter: 0, openingWidthProx: 80, openingWidthDist: 70, reliefs: [] };
     case 'hock':
-      return { ...BASE, braceType, wallThickness: 3, jointGap: 10, hingeRadius: 9, hingeHole: 4, openingCenter: 0, openingWidthProx: 70, openingWidthDist: 80, perfDiameter: 6, perfSpacing: 11, reliefs: [] };
+      return { ...BASE, braceType, wallThickness: 3, jointGap: 10, hingeRadius: 9, romFlexion: 90, romExtension: 165, hingeHole: 4, openingCenter: 0, openingWidthProx: 70, openingWidthDist: 80, perfDiameter: 6, perfSpacing: 11, reliefs: [] };
     case 'carpal':
-      return { ...BASE, braceType, wallThickness: 3, hinged: false, jointGap: 8, hingeRadius: 8, hingeHole: 4, openingCenter: 0, openingWidthProx: 70, openingWidthDist: 90, strapWidth: 20, perfDiameter: 6, perfSpacing: 11, reliefs: [] };
+      return { ...BASE, braceType, wallThickness: 3, hinged: false, romFlexion: 110, romExtension: 190, jointGap: 8, hingeRadius: 8, hingeHole: 4, openingCenter: 0, openingWidthProx: 70, openingWidthDist: 90, strapWidth: 20, perfDiameter: 6, perfSpacing: 11, reliefs: [] };
   }
 }
 
-export type ParamKey = Exclude<keyof BraceParams, 'braceType' | 'reliefs'>;
+export type ParamKey = Exclude<keyof BraceParams, 'braceType' | 'reliefs' | 'proxTrimShape' | 'distTrimShape'>;
 
 export interface ParamSpec {
   key: ParamKey;
@@ -193,6 +232,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   { key: 'flareWidth', group: 'Fit', label: 'Flare width', kind: 'number', min: 2, max: 20, step: 1, unit: 'mm' },
 
   { key: 'wallThickness', group: 'Shell', label: 'Wall thickness', kind: 'number', min: 1.5, max: 8, step: 0.25, unit: 'mm' },
+  { key: 'edgeRounding', group: 'Shell', label: 'Edge rounding', kind: 'number', min: 0, max: 4, step: 0.25, unit: 'mm', help: 'Rolls the outer edge of trim lines, slots and holes for comfort.' },
   { key: 'resolution', group: 'Shell', label: 'Mesh resolution', kind: 'number', min: 0.5, max: 3, step: 0.25, unit: 'mm', help: 'Smaller = smoother but slower.' },
 
   { key: 'proxTrimOffset', group: 'Trim lines', label: 'Proximal trim offset', kind: 'number', min: -60, max: 60, step: 1, unit: 'mm', help: '+ moves the top edge further proximal.' },
@@ -206,6 +246,10 @@ export const PARAM_SPECS: ParamSpec[] = [
   { key: 'hingeHole', group: 'Joint', label: 'Rivet / screw hole Ø', kind: 'number', min: 0, max: 10, step: 0.5, unit: 'mm', showIf: (p) => p.hinged },
   { key: 'hingeBossThickness', group: 'Joint', label: 'Hinge tab thickness', kind: 'number', min: 2, max: 10, step: 0.25, unit: 'mm', showIf: (p) => p.hinged },
   { key: 'hingeClearance', group: 'Joint', label: 'Hinge clearance', kind: 'number', min: 0, max: 2, step: 0.1, unit: 'mm', showIf: (p) => p.hinged },
+  { key: 'romStops', group: 'Joint', label: 'Range-of-motion stops', kind: 'bool', showIf: (p) => p.hinged, help: 'A stop pin on the proximal pad runs in an arc slot in the distal pad.' },
+  { key: 'romFlexion', group: 'Joint', label: 'Flexion limit (joint angle)', kind: 'number', min: 30, max: 200, step: 1, unit: '°', showIf: (p) => p.hinged && p.romStops, help: 'Smallest joint angle allowed. 180° = straight limb.' },
+  { key: 'romExtension', group: 'Joint', label: 'Extension limit (joint angle)', kind: 'number', min: 60, max: 220, step: 1, unit: '°', showIf: (p) => p.hinged && p.romStops, help: 'Largest joint angle allowed. Above 180° = hyperextension.' },
+  { key: 'stopPinDiameter', group: 'Joint', label: 'Stop pin Ø', kind: 'number', min: 2, max: 6, step: 0.5, unit: 'mm', showIf: (p) => p.hinged && p.romStops },
   { key: 'rigidOverlap', group: 'Joint', label: 'Cuff overlap (rigid)', kind: 'number', min: 0, max: 6, step: 0.5, unit: 'mm', showIf: (p) => !p.hinged },
 
   { key: 'openingCenter', group: 'Opening', label: 'Opening position', kind: 'number', min: 0, max: 359, step: 5, unit: '°', help: '0 = cranial, 90 = lateral, 180 = caudal, 270 = medial.' },
