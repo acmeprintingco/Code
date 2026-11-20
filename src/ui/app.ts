@@ -13,6 +13,19 @@ import { GAP_STOPS, Viewer, type TrimHandle, type ViewName } from './viewer';
 import { SCAN_ACCEPT, download, emptyCase, parseProject, pickFile, readScanFile, safeName, serializeProject, type CaseInfo } from './io';
 import { openWorkOrder } from './report';
 import type { CuffPayload, FromWorker, SerializedFrames, ToWorker } from './protocol';
+import { icon } from './icons';
+import { applyTheme, type Theme } from './theme';
+
+/** Keep the filled part of range sliders in sync with their value. */
+function fillRange(el: HTMLInputElement) {
+  const min = +el.min || 0, max = +el.max || 100;
+  el.style.setProperty('--pct', `${((+el.value - min) / (max - min)) * 100}%`);
+}
+document.addEventListener('input', (e) => {
+  const t = e.target as HTMLInputElement;
+  if (t?.type === 'range') fillRange(t);
+});
+const fillRanges = (root: ParentNode) => root.querySelectorAll<HTMLInputElement>('input[type=range]').forEach(fillRange);
 
 type Pick = { kind: 'landmark'; id: LandmarkId } | { kind: 'relief' } | { kind: 'cut' } | null;
 type Vec3 = [number, number, number];
@@ -65,6 +78,9 @@ export class App {
   private statusMsg!: HTMLElement;
   private statusWarn!: HTMLElement;
   private caseTitle!: HTMLElement;
+  private themeBtn!: HTMLButtonElement;
+  /** Step that was just opened by the user; only it plays the reveal animation. */
+  private revealStep: string | null = null;
 
   constructor(private root: HTMLElement) {
     this.worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
@@ -81,41 +97,51 @@ export class App {
 
   // ---------------------------------------------------------------- layout
   private buildLayout() {
-    this.caseTitle = h('span', { class: 'case-title' });
+    this.caseTitle = h('span', { class: 'case-chip' });
+    this.themeBtn = h('button', { class: 'icon-btn', onclick: () => this.toggleTheme() });
     const top = h('header', { class: 'topbar' },
-      h('div', { class: 'brand' }, h('div', { class: 'logo' }, 'PB'), 'PetBrace Studio'),
+      h('div', { class: 'brand' }, h('div', { class: 'logo' }, 'PB'), h('div', {}, 'PetBrace Studio', h('small', {}, 'Veterinary orthotic design'))),
       this.caseTitle,
       h('div', { class: 'spacer' }),
-      h('button', { class: 'btn', onclick: () => this.openProject() }, 'Open project'),
-      h('button', { class: 'btn', onclick: () => this.saveProject() }, 'Save project'),
+      h('button', { class: 'btn ghost', onclick: () => this.openProject() }, icon('FolderOpen'), h('span', { class: 'btn-label' }, 'Open')),
+      h('button', { class: 'btn', onclick: () => this.saveProject() }, icon('Save'), h('span', { class: 'btn-label' }, 'Save project')),
+      h('div', { class: 'divider' }),
+      this.themeBtn,
     );
+    this.updateThemeButton();
     this.sidebar = h('aside', { class: 'sidebar' });
     const vp = h('main', { class: 'viewport' });
     this.root.append(top, this.sidebar, vp);
     this.viewer = new Viewer(vp);
+    this.viewer.setTheme(this.theme() === 'dark');
 
-    const view = (v: ViewName, label: string) => h('button', { class: 'btn small', onclick: () => this.viewer.setView(v) }, label);
+    const views = h('div', { class: 'seg' });
+    const view = (v: ViewName, label: string) => h('button', { class: 'seg-btn', onclick: (e: Event) => {
+      this.viewer.setView(v);
+      views.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b === e.currentTarget));
+    } }, label);
     const slider = (label: string, init: number, fn: (v: number) => void) =>
       h('label', {}, label, h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: init, oninput: (e: Event) => fn(+(e.target as HTMLInputElement).value) }));
     const axes = h('input', { type: 'checkbox', checked: true, onchange: (e: Event) => this.viewer.setAxesVisible((e.target as HTMLInputElement).checked) });
     const gap = h('input', { type: 'checkbox', checked: this.gapMap, onchange: (e: Event) => { this.gapMap = (e.target as HTMLInputElement).checked; this.updateGapMap(); } });
     const handles = h('input', { type: 'checkbox', checked: this.showHandles, onchange: (e: Event) => { this.showHandles = (e.target as HTMLInputElement).checked; this.viewer.setHandlesVisible(this.showHandles); } });
     vp.append(h('div', { class: 'vp-toolbar' },
-      h('div', { class: 'vp-card' }, view('fit', 'Fit'), view('lateral', 'Lateral'), view('medial', 'Medial'), view('cranial', 'Cranial'), view('caudal', 'Caudal')),
+      h('div', { class: 'vp-card' }, (views.append(view('fit', 'Fit'), view('lateral', 'Lateral'), view('medial', 'Medial'), view('cranial', 'Cranial'), view('caudal', 'Caudal')), views)),
       h('div', { class: 'sep' }),
-      h('div', { class: 'vp-card' }, slider('Scan', 1, (v) => this.viewer.setScanOpacity(v)), slider('Brace', 1, (v) => this.viewer.setBraceOpacity(v)), h('label', {}, axes, 'Axes'),
+      h('div', { class: 'vp-card' }, slider('Scan', 1, (v) => this.viewer.setScanOpacity(v)), slider('Brace', 1, (v) => this.viewer.setBraceOpacity(v)), h('div', { class: 'vdiv' }), h('label', {}, axes, 'Axes'),
         h('label', { title: 'Drag the round handles on the cuff edges to reshape the trim line' }, handles, 'Trim handles'), h('label', { title: 'Colour the brace by skin-to-shell gap' }, gap, 'Gap map')),
     ));
     this.legend = h('div', { class: 'legend' });
     vp.append(this.legend);
-    this.empty = h('div', { class: 'vp-empty' }, h('div', {}, h('b', {}, 'No scan loaded'), 'Import an STL, OBJ or PLY limb scan, or load a demo limb.'));
+    this.empty = h('div', { class: 'vp-empty' }, h('div', {}, h('div', { class: 'empty-icon' }, icon('Box', 30)), h('b', {}, 'No scan loaded'), 'Import an STL, OBJ or PLY limb scan, or load a demo limb.'));
     this.banner = h('div', { class: 'vp-banner' });
-    this.busy = h('div', { class: 'busy' }, 'Generating brace…');
+    this.busy = h('div', { class: 'busy' }, icon('Loader2', 15), 'Generating brace…');
     vp.append(this.empty, this.banner, this.busy);
 
-    this.statusMsg = h('span', {}, 'Ready.');
+    this.statusMsg = h('span', { class: 'status-msg' }, 'Ready.');
     this.statusWarn = h('span', { class: 'warn' });
-    this.root.append(h('footer', { class: 'statusbar' }, this.statusMsg, this.statusWarn));
+    this.root.append(h('footer', { class: 'statusbar' }, h('span', { class: 'dot' }), this.statusMsg, this.statusWarn));
+    fillRanges(vp);
 
     vp.addEventListener('dragover', (e) => e.preventDefault());
     vp.addEventListener('drop', (e) => {
@@ -123,6 +149,23 @@ export class App {
       const f = e.dataTransfer?.files?.[0];
       if (f) this.importScan(f);
     });
+  }
+
+  private theme(): Theme {
+    return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+  }
+
+  private toggleTheme() {
+    applyTheme(this.theme() === 'dark' ? 'light' : 'dark', true);
+    this.updateThemeButton();
+  }
+
+  private updateThemeButton() {
+    const dark = this.theme() === 'dark';
+    this.themeBtn.replaceChildren(icon(dark ? 'Sun' : 'Moon', 18));
+    this.themeBtn.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+    this.themeBtn.setAttribute('aria-label', this.themeBtn.title);
+    this.viewer?.setTheme(dark);
   }
 
   private status(msg: string, warn = '') {
@@ -142,6 +185,7 @@ export class App {
       this.step('export', 6, 'Review & export', this.result ? 'Ready' : '', false, () => this.exportStep()),
     );
     this.sidebar.scrollTop = scrollTop;
+    fillRanges(this.sidebar);
     const c = this.caseInfo;
     this.caseTitle.textContent = `${c.caseId}${c.patient ? ' · ' + c.patient : ''} · ${BRACE_TYPES[this.params.braceType].label}`;
     this.empty.style.display = this.scan ? 'none' : '';
@@ -150,10 +194,10 @@ export class App {
   private step(id: string, n: number, title: string, summary: string, done: boolean, body: () => HTMLElement[]) {
     const open = this.openSteps.has(id);
     const sec = h('section', { class: `step${open ? ' open' : ''}${done ? ' done' : ''}` },
-      h('header', { onclick: () => { open ? this.openSteps.delete(id) : this.openSteps.add(id); this.renderSidebar(); } },
-        h('div', { class: 'num' }, done ? '✓' : String(n)), h('h2', {}, title), h('span', { class: 'summary' }, summary), h('span', { class: 'chev' }, '›')),
+      h('header', { onclick: () => { open ? this.openSteps.delete(id) : this.openSteps.add(id); this.revealStep = open ? null : id; this.renderSidebar(); this.revealStep = null; } },
+        h('div', { class: 'num' }, done ? '✓' : String(n)), h('h2', {}, title), h('span', { class: 'summary' }, summary), icon('ChevronRight', 16, 'chev')),
     );
-    if (open) sec.append(h('div', { class: 'body' }, ...body()));
+    if (open) sec.append(h('div', { class: `body${this.revealStep === id ? ' reveal' : ''}` }, ...body()));
     return sec;
   }
 
@@ -164,11 +208,13 @@ export class App {
     const sel = (label: string, key: keyof CaseInfo, options: string[]) => h('label', { class: 'field' }, h('span', {}, label),
       h('select', { onchange: (e: Event) => { (c as any)[key] = (e.target as HTMLSelectElement).value; } }, ...options.map((o) => h('option', { value: o, selected: c[key] === o }, o))));
     const types = (Object.keys(BRACE_TYPES) as BraceType[]).map((t) =>
-      h('button', { class: `btn${this.params.braceType === t ? ' active' : ''}`, style: 'flex:1', onclick: () => this.setBraceType(t) }, BRACE_TYPES[t].label));
+      h('button', { class: `seg-btn${this.params.braceType === t ? ' active' : ''}`, onclick: () => this.setBraceType(t) }, BRACE_TYPES[t].label));
     return [
-      h('div', { class: 'btns' }, ...types),
+      h('div', { class: 'section-label' }, 'Brace type'),
+      h('div', { class: 'seg' }, ...types),
       h('p', { class: 'hint' }, `${BRACE_TYPES[this.params.braceType].proximalSegment} + ${BRACE_TYPES[this.params.braceType].distalSegment}, articulating at the ${BRACE_TYPES[this.params.braceType].joint}.`),
-      h('div', { class: 'grid2' },
+      h('div', { class: 'section-label' }, 'Patient & clinic'),
+      h('div', { class: 'grid2', style: 'margin-top:0' },
         txt('Case ID', 'caseId'), txt('Patient name', 'patient'),
         sel('Species', 'species', ['Canine', 'Feline', 'Other']), txt('Breed', 'breed'),
         txt('Weight (kg)', 'weightKg'), txt('Age', 'age'),
@@ -182,7 +228,7 @@ export class App {
 
   private scanStep(): HTMLElement[] {
     const drop = h('div', { class: 'drop', onclick: async () => { const f = await pickFile(SCAN_ACCEPT); if (f) this.importScan(f); } },
-      h('b', {}, 'Import 3D scan'), h('div', {}, 'STL · OBJ · PLY — click or drop onto the viewport'));
+      h('div', { class: 'drop-icon' }, icon('Upload', 20)), h('b', {}, 'Import 3D scan'), h('small', {}, 'STL · OBJ · PLY — click, or drop onto the viewport'));
     const out: HTMLElement[] = [drop];
     if (this.scan) {
       const g = this.scan.geometry;
@@ -199,27 +245,27 @@ export class App {
     }
     if (this.scan) out.push(...this.cutTools());
     out.push(h('p', { class: 'hint' }, 'Scan the limb in a natural standing position. Small disconnected fragments (floor, hair, other limbs) are removed automatically.'));
-    out.push(h('div', { class: 'btns' }, h('span', { class: 'hint' }, 'Demo limb:'),
-      ...(Object.keys(BRACE_TYPES) as BraceType[]).map((t) => h('button', { class: 'btn small', onclick: () => this.loadDemo(t) }, BRACE_TYPES[t].label.split(' ')[0]))));
+    out.push(h('div', { class: 'section-label' }, 'No scan? Try a demo limb'),
+      h('div', { class: 'seg' }, ...(Object.keys(BRACE_TYPES) as BraceType[]).map((t) => h('button', { class: 'seg-btn', 'data-demo': t, onclick: () => this.loadDemo(t) }, BRACE_TYPES[t].label.split(' ')[0]))));
     return out;
   }
 
   private cutTools(): HTMLElement[] {
-    const box = h('div', { class: 'toolbox' }, h('div', { class: 'tb-title' }, 'Clean up scan'));
+    const box = h('div', { class: 'toolbox' }, h('div', { class: 'tb-title' }, icon('Scissors', 15), 'Clean up scan'));
     if (this.cutPending) {
       box.append(
         h('p', { class: 'hint' }, 'Red plane shows the cut. Which side should be removed?'),
         h('div', { class: 'btns' },
-          h('button', { class: 'btn primary', onclick: () => this.applyCut(true) }, 'Remove above'),
-          h('button', { class: 'btn primary', onclick: () => this.applyCut(false) }, 'Remove below'),
-          h('button', { class: 'btn', onclick: () => this.cancelCut() }, 'Cancel')));
+          h('button', { class: 'btn small primary', onclick: () => this.applyCut(true) }, 'Remove above'),
+          h('button', { class: 'btn small primary', onclick: () => this.applyCut(false) }, 'Remove below'),
+          h('button', { class: 'btn small ghost', onclick: () => this.cancelCut() }, 'Cancel')));
     } else {
       const cutting = this.pick?.kind === 'cut';
       box.append(
         h('p', { class: 'hint' }, 'Rotate the view so the unwanted part (body, floor, paw) is above or below the limb, then click where to cut. The cut runs horizontally across the screen.'),
         h('div', { class: 'btns' },
-          h('button', { class: `btn${cutting ? ' active' : ''}`, onclick: () => this.setPick(cutting ? null : { kind: 'cut' }) }, cutting ? 'Click on scan… (Esc)' : 'Cut with plane'),
-          h('button', { class: 'btn', disabled: !this.cutHistory.length, onclick: () => this.undoCut() }, `Undo cut${this.cutHistory.length ? ` (${this.cutHistory.length})` : ''}`)));
+          h('button', { class: `btn small${cutting ? ' active' : ''}`, onclick: () => this.setPick(cutting ? null : { kind: 'cut' }) }, icon('Scissors', 14), cutting ? 'Click on scan… (Esc)' : 'Cut with plane'),
+          h('button', { class: 'btn small ghost', disabled: !this.cutHistory.length, onclick: () => this.undoCut() }, icon('Undo2', 14), `Undo${this.cutHistory.length ? ` (${this.cutHistory.length})` : ''}`)));
     }
     return [box];
   }
@@ -240,7 +286,7 @@ export class App {
       ...items,
       h('div', { class: 'btns' },
         h('button', { class: 'btn small', onclick: () => this.setPick({ kind: 'landmark', id: missingLandmarks(this.landmarks)[0] ?? 'proximal' }) }, 'Place next'),
-        h('button', { class: 'btn small', onclick: () => { this.landmarks = {}; this.result = null; this.viewer.setBrace([]); this.viewer.setFrames(null); this.refreshMarkers(); this.renderSidebar(); } }, 'Clear all')),
+        h('button', { class: 'btn small ghost danger', onclick: () => { this.landmarks = {}; this.result = null; this.viewer.setBrace([]); this.viewer.setFrames(null); this.refreshMarkers(); this.renderSidebar(); } }, 'Clear all')),
     ];
   }
 
@@ -261,7 +307,7 @@ export class App {
     }
     const ready = !!this.scan && missingLandmarks(this.landmarks).length === 0;
     const edited = this.params.proxTrimShape.some((v) => v !== 0) || this.params.distTrimShape.some((v) => v !== 0);
-    out.splice(3, 0, h('div', { class: 'toolbox' }, h('div', { class: 'tb-title' }, 'Trim line editing'),
+    out.splice(3, 0, h('div', { class: 'toolbox' }, h('div', { class: 'tb-title' }, icon('RotateCcw', 15), 'Trim line editing'),
       h('p', { class: 'hint' }, 'Drag the round white handles on the cuff edges in the 3D view up or down to reshape the trim line. Handles are hidden inside the donning opening.'),
       h('div', { class: 'btns' }, h('button', { class: 'btn small', disabled: !edited, onclick: () => { this.params.proxTrimShape = this.params.proxTrimShape.map(() => 0); this.params.distTrimShape = this.params.distTrimShape.map(() => 0); this.renderSidebar(); this.scheduleGenerate(0); } }, 'Reset hand edits'))));
     if (this.result) {
@@ -272,7 +318,7 @@ export class App {
       h('div', { class: 'row' }, h('label', {}, 'Update automatically'), h('input', { type: 'checkbox', checked: this.autoUpdate, onchange: (e: Event) => (this.autoUpdate = (e.target as HTMLInputElement).checked) })),
       h('div', { class: 'btns' },
         h('button', { class: 'btn primary', disabled: !ready, onclick: () => this.generate() }, 'Generate brace'),
-        h('button', { class: 'btn', onclick: () => { const r = this.params.reliefs; this.params = { ...defaultParams(this.params.braceType), reliefs: r }; this.renderSidebar(); this.scheduleGenerate(); } }, 'Reset defaults')),
+        h('button', { class: 'btn ghost', onclick: () => { const r = this.params.reliefs; this.params = { ...defaultParams(this.params.braceType), reliefs: r }; this.renderSidebar(); this.scheduleGenerate(); } }, 'Reset defaults')),
     );
     if (!ready) out.push(h('p', { class: 'hint' }, 'Place all five landmarks to generate the brace.'));
     return out;
@@ -309,7 +355,7 @@ export class App {
       return h('div', { class: `relief${r.id === this.selectedRelief ? ' sel' : ''}`, onclick: () => { this.selectedRelief = r.id; this.refreshMarkers(); } },
         h('div', { class: 'top' },
           h('input', { type: 'text', value: r.label, list: 'relief-presets', oninput: (e: Event) => { r.label = (e.target as HTMLInputElement).value; this.refreshMarkers(); } }),
-          h('button', { class: 'btn small', onclick: (e: Event) => { e.stopPropagation(); this.params.reliefs = this.params.reliefs.filter((x) => x !== r); this.refreshMarkers(); this.renderSidebar(); this.scheduleGenerate(); } }, 'Remove')),
+          h('button', { class: 'icon-btn', title: 'Remove zone', 'aria-label': 'Remove zone', onclick: (e: Event) => { e.stopPropagation(); this.params.reliefs = this.params.reliefs.filter((x) => x !== r); this.refreshMarkers(); this.renderSidebar(); this.scheduleGenerate(); } }, icon('Trash2', 15))),
         field('Radius (mm)', 'radius', 4, 50, 1),
         field('Amount (mm, − = compress)', 'amount', -4, 10, 0.5));
     });
@@ -318,7 +364,7 @@ export class App {
       h('p', { class: 'hint' }, 'Relief zones lift the shell off bony prominences; negative values add gentle compression (e.g. supracondylar grip for suspension).'),
       h('datalist', { id: 'relief-presets' }, ...presets.map((p) => h('option', { value: p }))),
       ...list,
-      h('div', { class: 'btns' }, h('button', { class: `btn${picking ? ' active' : ''}`, onclick: () => this.setPick(picking ? null : { kind: 'relief' }) }, picking ? 'Click on scan… (Esc)' : '+ Add zone')),
+      h('div', { class: 'btns' }, h('button', { class: `btn${picking ? ' active' : ''}`, onclick: () => this.setPick(picking ? null : { kind: 'relief' }) }, icon('Plus', 15), picking ? 'Click on scan… (Esc)' : 'Add zone')),
       h('p', { class: 'hint' }, `Typical for ${BRACE_TYPES[this.params.braceType].joint}: ${presets.slice(0, 3).join(', ')}.`),
     ];
   }
@@ -342,11 +388,11 @@ export class App {
       h('p', { class: 'hint' }, mat.note),
       h('div', { class: 'row' }, h('label', {}, 'Orient for printing (cuff axis vertical, on bed)'), h('input', { type: 'checkbox', checked: this.printOrient, onchange: (e: Event) => (this.printOrient = (e.target as HTMLInputElement).checked) })),
       h('div', { class: 'btns' },
-        ...this.result.cuffs.map((c) => h('button', { class: 'btn', onclick: () => this.exportSTL([c.id]) }, `${c.id === 'proximal' ? 'Proximal' : 'Distal'} STL`)),
-        h('button', { class: 'btn primary', onclick: () => this.exportSTL(['proximal', 'distal']) }, 'All parts STL')),
+        h('button', { class: 'btn primary', onclick: () => this.exportSTL(['proximal', 'distal']) }, icon('Download', 15), 'All parts STL'),
+        ...this.result.cuffs.map((c) => h('button', { class: 'btn', onclick: () => this.exportSTL([c.id]) }, `${c.id === 'proximal' ? 'Proximal' : 'Distal'} STL`))),
       h('div', { class: 'btns' },
-        h('button', { class: 'btn', onclick: () => this.workOrder() }, 'Work order (print)'),
-        h('button', { class: 'btn', onclick: () => this.saveProject() }, 'Save project')),
+        h('button', { class: 'btn', onclick: () => this.workOrder() }, icon('FileText', 15), 'Work order'),
+        h('button', { class: 'btn ghost', onclick: () => this.saveProject() }, icon('Save', 15), 'Save project')),
     ];
     if (this.result.warnings.length) out.unshift(...this.result.warnings.map((w) => h('div', { class: 'note' }, w)));
     out.push(h('div', { class: 'note' }, 'Custom veterinary device: confirm fit, skin clearance and range of motion with the treating veterinarian before dispensing.'));

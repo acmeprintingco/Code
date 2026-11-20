@@ -3,7 +3,11 @@
 3D design software for **custom 3D-printed veterinary orthopedic braces**: stifle (knee), hock (tarsus) and carpal (wrist).
 Import a 3D scan of the limb, place five anatomical landmarks, tune the design, and export watertight, print-ready STL files plus a printable work order.
 
-![workflow](docs/workflow.png)
+| Light | Dark |
+|---|---|
+| ![PetBrace Studio, light theme](docs/workflow.png) | ![PetBrace Studio, dark theme](docs/workflow-dark.png) |
+
+The sun/moon button in the top bar switches between light and dark mode. The choice is remembered on each device and defaults to the operating system setting.
 
 ## Quick start
 

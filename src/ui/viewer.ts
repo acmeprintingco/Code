@@ -69,6 +69,8 @@ export class Viewer {
   private down = new Vector2();
   private raycaster = new Raycaster();
   onPick: ((p: Vec3) => void) | null = null;
+  private hemi = new HemisphereLight(0xffffff, 0x8899aa, 1.4);
+  private baseColors = { proximal: 0x1aa596, distal: 0x3b7fd1 };
   private braceMats = {
     proximal: new MeshStandardMaterial({ color: 0x1aa596, roughness: 0.45, metalness: 0.05, transparent: true, opacity: 1 }),
     distal: new MeshStandardMaterial({ color: 0x3b7fd1, roughness: 0.45, metalness: 0.05, transparent: true, opacity: 1 }),
@@ -88,7 +90,7 @@ export class Viewer {
     this.controls.dampingFactor = 0.12;
     this.camera.position.set(400, 200, 400);
 
-    this.scene.add(new HemisphereLight(0xffffff, 0x8899aa, 1.4));
+    this.scene.add(this.hemi);
     this.scene.add(new AmbientLight(0xffffff, 0.25));
     const key = new DirectionalLight(0xffffff, 1.6);
     key.position.set(1, 1.5, 1);
@@ -116,6 +118,15 @@ export class Viewer {
       this.renderer.render(this.scene, this.camera);
       this.labels.render(this.scene, this.camera);
     });
+  }
+
+  /** Adapt materials and lighting to the UI theme (the background itself is CSS). */
+  setTheme(dark: boolean) {
+    this.baseColors = dark ? { proximal: 0x26c6b3, distal: 0x5b97ea } : { proximal: 0x1aa596, distal: 0x3b7fd1 };
+    this.scanMat.color.set(dark ? 0xc8a68a : 0xd8b79a);
+    this.hemi.groundColor.set(dark ? 0x334455 : 0x8899aa);
+    this.hemi.intensity = dark ? 1.25 : 1.4;
+    this.applyGapColors();
   }
 
   setPickCursor(on: boolean) {
@@ -195,7 +206,7 @@ export class Viewer {
   private applyGapColors() {
     for (const m of Object.values(this.braceMats)) {
       m.vertexColors = this.gapMode;
-      m.color.set(this.gapMode ? 0xffffff : m === this.braceMats.proximal ? 0x1aa596 : 0x3b7fd1);
+      m.color.set(this.gapMode ? 0xffffff : m === this.braceMats.proximal ? this.baseColors.proximal : this.baseColors.distal);
       m.needsUpdate = true;
     }
     if (!this.gapMode) return;

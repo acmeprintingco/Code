@@ -1,6 +1,6 @@
 // Desktop shell for PetBrace Studio. Serves the Vite build from dist/ over a
 // privileged app:// scheme so the module web worker loads like on the web.
-const { app, BrowserWindow, Menu, net, protocol, shell } = require('electron');
+const { app, BrowserWindow, Menu, nativeTheme, net, protocol, shell } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
@@ -17,7 +17,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: 'PetBrace Studio',
-    backgroundColor: '#f4f6f8',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0a0d12' : '#f4f6f9',
     webPreferences: { contextIsolation: true, sandbox: true },
   });
   // The work order opens in a child window; external links go to the browser.
@@ -36,12 +36,12 @@ function runSmokeTest(win) {
   win.webContents.on('did-fail-load', (_e, code, desc) => console.log('SMOKE: load failed', code, desc));
   win.webContents.once('did-finish-load', async () => {
     const script = `new Promise((resolve) => {
-      const btn = document.querySelector('.drop ~ .btns button');
+      const btn = document.querySelector('[data-demo]');
       if (!btn) return resolve('no UI: ' + document.body.innerText.slice(0, 200));
       btn.click();
       const t0 = Date.now();
       const tick = () => {
-        const s = document.querySelector('.statusbar span').textContent;
+        const s = document.querySelector('.status-msg').textContent;
         if (/generated|failed/.test(s) || Date.now() - t0 > 30000) resolve(document.title + ' | ' + s);
         else setTimeout(tick, 200);
       };
